@@ -14,16 +14,16 @@
           <p class="eyebrow">Digitaal kaartspel prototype</p>
           <h1>Campfire Survival</h1>
           <p class="intro">
-            Kies het aantal spelers, vul namen in en speel het hele potje op een laptop of tablet.
+            Speel als Speler 1 tegen eenvoudige computerspelers en test of de kaartregels lekker lopen.
           </p>
         </div>
 
         <div class="setup-block">
           <h2>Aantal spelers</h2>
           <div class="count-picker" aria-label="Aantal spelers kiezen">
-            <button type="button" class="count-button is-selected" data-count="3">3 spelers</button>
-            <button type="button" class="count-button" data-count="4">4 spelers</button>
-            <button type="button" class="count-button" data-count="5">5 spelers</button>
+            <button type="button" class="count-button is-selected" data-count="3">3 spelers: 1 mens + 2 computers</button>
+            <button type="button" class="count-button" data-count="4">4 spelers: 1 mens + 3 computers</button>
+            <button type="button" class="count-button" data-count="5">5 spelers: 1 mens + 4 computers</button>
           </div>
         </div>
 
@@ -41,6 +41,14 @@
           <h1>Kaarttafel</h1>
         </div>
         <div class="header-actions">
+          <label class="speed-control" for="computer-speed">
+            Computerbeurten
+            <select id="computer-speed">
+              <option value="normal">Normale snelheid</option>
+              <option value="fast">Snelle computerbeurten</option>
+              <option value="instant">Direct zonder animaties</option>
+            </select>
+          </label>
           <button type="button" class="secondary-button" data-action="open-rules">Spelregels</button>
           <button type="button" class="danger-button" data-action="force-endgame">Spel nu beëindigen</button>
         </div>
@@ -50,7 +58,7 @@
 
       <main class="table-layout">
         <section class="active-column">
-          <div id="handoff-panel" class="handoff-panel"></div>
+          <div id="turn-panel" class="turn-panel"></div>
           <div id="private-panel" class="private-panel"></div>
           <div id="action-panel" class="action-panel"></div>
         </section>

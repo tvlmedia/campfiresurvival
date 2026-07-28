@@ -1,6 +1,6 @@
 # Campfire Survival
 
-Een volledig speelbaar digitaal prototype van een eenvoudig kaartspel voor 3 tot 5 spelers. Het prototype gebruikt alleen HTML, CSS en vanilla JavaScript.
+Een singleplayer digitaal prototype van een eenvoudig kaartspel voor 3 tot 5 spelers. De gebruiker bestuurt alleen Speler 1; alle andere spelers worden automatisch bestuurd door eenvoudige JavaScript-regels en willekeurige keuzes.
 
 ## Starten
 
@@ -16,7 +16,9 @@ Ga daarna naar `http://127.0.0.1:8787`.
 
 ## Spelregels
 
-Kies op het startscherm 3, 4 of 5 spelers en vul namen in. Lege namen worden automatisch `Speler 1`, `Speler 2`, enzovoort.
+Kies op het startscherm 3, 4 of 5 spelers. Vul alleen de naam van de menselijke speler in. Leeg laten gebruikt automatisch `Speler 1`.
+
+De overige spelers heten automatisch `Computer 1`, `Computer 2`, enzovoort.
 
 Iedere speler start met:
 
@@ -26,17 +28,35 @@ Iedere speler start met:
 
 De gewone kaarten worden geschud als één gesloten trekstapel. Niet uitgedeelde eilanden doen dat potje niet mee, behalve wanneer `Kamp verplaatsen` een eiland wisselt met de beschikbare eilanden.
 
-Tijdens je beurt kies je precies één hoofdactie:
+Tijdens jouw beurt kies je precies één hoofdactie:
 
 - `Kaart trekken`: trek 1 kaart en verwerk die direct.
-- `Kaart stelen`: kies een andere speler en steel willekeurig 1 verborgen handkaart. Als niemand handkaarten heeft, moet je een kaart trekken.
+- `Kaart stelen`: kies een computerspeler en steel willekeurig 1 verborgen handkaart.
 
 Extra acties vervangen de hoofdactie niet:
 
 - `Sabotage`: leg één open Sabotage af om een ramp uit je eigen hand aan een andere speler te geven. Maximaal één keer per beurt.
 - `De Heksenheuvel`: als je dit eiland hebt, mag je één keer in het spel een ramp uit je hand aan een andere speler geven.
 
-Elke beurt begint met een overdrachtscherm, zodat spelers hun hand en eiland geheim kunnen houden op één apparaat.
+Na jouw hoofdactie spelen alle computerspelers automatisch door totdat jij weer aan de beurt bent. De snelheid is instelbaar:
+
+- Normale snelheid
+- Snelle computerbeurten
+- Direct zonder animaties
+
+Je mag altijd je eigen hand, eiland en voordeelkaarten zien. Je ziet van computerspelers alleen hun naam, aantal handkaarten, open voordeelkaarten en of een eenmalige eilandkracht gebruikt is.
+
+## Computerregels
+
+Computerspelers gebruiken alleen vaste regels en `Math.random()`:
+
+- 65% kans om 1 kaart te trekken.
+- 35% kans om 1 willekeurige handkaart te stelen.
+- Als niemand bestolen kan worden, trekt de computer altijd.
+- Heeft de computer Sabotage en een rampkaart, dan gebruikt hij Sabotage met 50% kans.
+- Heeft de computer De Heksenheuvel ongebruikt en een rampkaart, dan gebruikt hij die kracht met 35% kans.
+- Een computer met De Spiegel gebruikt die met 60% kans wanneer hij een ramp aangeboden krijgt.
+- Plundertocht kiest willekeurig tussen beschikbare opties.
 
 ## Kaartverdeling
 
@@ -92,7 +112,15 @@ Het scoreoverzicht toont per speler de beginhoeveelheden, rampen, geblokkeerde r
 
 ## Debugpaneel
 
-Het prototype bevat een inklapbaar debugpaneel. Daarmee kun je kaarten geven of verwijderen, voordeelkaarten geven, eilanden toewijzen, eilandkrachten markeren, de trekstapel bekijken en schudden, de actieve speler veranderen, kaarten bovenop de trekstapel leggen, het eindspel starten en het spel resetten.
+Het prototype bevat een inklapbaar debugpaneel. Daarmee kun je kaarten geven of verwijderen, voordeelkaarten geven, eilanden toewijzen, eilandkrachten markeren, de trekstapel schudden, de actieve speler veranderen, kaarten bovenop de trekstapel leggen, het eindspel starten en het spel resetten.
+
+Daarnaast is er een simulatiemodus voor balanscontrole:
+
+- 10 potjes simuleren
+- 100 potjes simuleren
+- 1.000 potjes simuleren
+
+Tijdens simulaties worden alle spelers automatisch bestuurd met dezelfde eenvoudige regels. De resultaten tonen onder andere winpercentages per eiland, gemiddelde scores, hoogste en laagste score, gebruikte Sabotagekaarten, doorgegeven rampen, tegengehouden rampen en hoe vaak De Spiegel, De Grot en Het Voedselbos effect hadden.
 
 ## Bekende TODO's
 

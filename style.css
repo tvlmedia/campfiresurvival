@@ -201,8 +201,28 @@ h3 {
 .header-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.speed-control {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.speed-control select {
+  min-height: 42px;
+  padding: 0 10px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid #cfd8d1;
+  border-radius: 6px;
+  text-transform: none;
 }
 
 .status-grid {
@@ -272,30 +292,21 @@ h3 {
   margin: 0 0 12px;
 }
 
-.handoff-panel {
-  display: none;
-}
-
-.handoff-panel.is-visible {
-  display: grid;
-  place-items: center;
-  min-height: 420px;
-  text-align: center;
-}
-
-.handoff-card {
-  width: min(440px, 100%);
-  padding: 24px;
+.turn-panel {
+  margin-bottom: 16px;
+  padding: 16px;
   background: #172424;
   color: #fff;
   border-radius: 8px;
 }
 
-.handoff-card h2 {
-  font-size: 1.8rem;
+.turn-panel h2 {
+  margin-bottom: 6px;
+  font-size: 1.35rem;
 }
 
-.handoff-card p {
+.turn-panel p {
+  margin-bottom: 0;
   color: #d9e6e3;
 }
 
@@ -483,6 +494,31 @@ h3 {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.stats-table th,
+.stats-table td {
+  padding: 7px;
+  text-align: left;
+  border-bottom: 1px solid #dfe5df;
+}
+
+.stats-table th {
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+}
+
+.simulation-results {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .deck-view {

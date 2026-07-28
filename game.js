@@ -68,7 +68,7 @@ const CARD_DEFINITIONS = [
     subtype: "leak",
     quantity: 2,
     icon: "🛶",
-    description: "Ramp. Geen effect — regel nog in ontwikkeling.",
+    description: "Ramp. Geen effect - regel nog in ontwikkeling.",
   },
   {
     key: "axe",
@@ -104,7 +104,7 @@ const CARD_DEFINITIONS = [
     subtype: "sabotage",
     quantity: 3,
     icon: "🧨",
-    description: "Voordeel. Eén keer gebruiken om een eigen ramp aan een ander te geven.",
+    description: "Voordeel. Gebruik één keer om een eigen ramp aan een ander te geven.",
   },
   {
     key: "motorboat",
@@ -187,19 +187,6 @@ const ISLAND_DEFINITIONS = [
   },
 ];
 
-const PROTECTION_MAP = {
-  bear: "rod",
-  fire: "axe",
-  drought: "rain",
-};
-
-const DISASTER_EFFECTS = {
-  bear: { resource: "fish", amount: 2, text: "-2 Vis" },
-  fire: { resource: "wood", amount: 2, text: "-2 Hout" },
-  drought: { resource: "water", amount: 2, text: "-2 Water" },
-  leak: { resource: null, amount: 0, text: "Geen effect — regel nog in ontwikkeling." },
-};
-
 const CARD_TYPE_LABELS = {
   resource: "Grondstof",
   danger: "Ramp",
@@ -208,31 +195,54 @@ const CARD_TYPE_LABELS = {
   island: "Eiland",
 };
 
+const PROTECTION_MAP = {
+  bear: { advantage: "rod", label: "Hengel" },
+  fire: { advantage: "axe", label: "Bijl" },
+  drought: { advantage: "rain", label: "Regenbui" },
+};
+
+const DISASTER_EFFECTS = {
+  bear: { resource: "fish", amount: 2, text: "-2 Vis" },
+  fire: { resource: "wood", amount: 2, text: "-2 Hout" },
+  drought: { resource: "water", amount: 2, text: "-2 Water" },
+  leak: { resource: null, amount: 0, text: "Geen effect - regel nog in ontwikkeling." },
+};
+
+const COMPUTER_SPEED_DELAYS = {
+  normal: 500,
+  fast: 140,
+  instant: 0,
+};
+
 let nextCardInstanceId = 1;
 
 const state = {
   selectedPlayerCount: 3,
+  computerSpeed: "normal",
   gameStarted: false,
   gameOver: false,
   scoringStarted: false,
+  processing: false,
+  computerRunning: false,
+  humanHandVisible: true,
+  humanIslandVisible: true,
   players: [],
   deck: [],
   discard: [],
   unusedIslands: [],
   currentPlayerIndex: 0,
   round: 1,
-  awaitingHandoff: true,
-  processing: false,
   currentTurn: {
     mainActionAvailable: true,
     sabotageUsed: false,
   },
+  metrics: createMetrics(),
   log: [],
   finalScores: [],
+  simulationResults: null,
   debug: {
     playerId: "",
     cardKey: "wood",
-    randomTargetId: "",
     handPlayerId: "",
     handCardId: "",
     advantageKey: "axe",
@@ -240,6 +250,7 @@ const state = {
     islandUsed: "false",
     activePlayerId: "",
     topCardKey: "wood",
+    simulationGames: "100",
   },
 };
 
@@ -259,33 +270,36 @@ document.addEventListener("DOMContentLoaded", () => {
 
 function handleSetupSubmit(event) {
   event.preventDefault();
-  const names = Array.from(document.querySelectorAll("[data-name-input]")).map((input) => input.value.trim());
-  initializeGame(state.selectedPlayerCount, names);
+  const humanName = document.getElementById("human-name")?.value.trim() || "Speler 1";
+  initializeGame(state.selectedPlayerCount, humanName);
 }
 
 function handleDocumentChange(event) {
   const target = event.target;
-  if (!target.id || !target.id.startsWith("debug-")) {
+  if (target.id === "computer-speed") {
+    state.computerSpeed = target.value;
+    renderInterface();
     return;
   }
-  const key = target.id.replace("debug-", "").replaceAll("-", "");
+
   const map = {
-    player: "playerId",
-    card: "cardKey",
-    randomplayer: "randomTargetId",
-    handplayer: "handPlayerId",
-    handcard: "handCardId",
-    advantage: "advantageKey",
-    island: "islandKey",
-    islandused: "islandUsed",
-    activeplayer: "activePlayerId",
-    topcard: "topCardKey",
+    "debug-player": "playerId",
+    "debug-card": "cardKey",
+    "debug-hand-player": "handPlayerId",
+    "debug-hand-card": "handCardId",
+    "debug-advantage": "advantageKey",
+    "debug-island": "islandKey",
+    "debug-island-used": "islandUsed",
+    "debug-active-player": "activePlayerId",
+    "debug-top-card": "topCardKey",
+    "debug-simulation-games": "simulationGames",
   };
-  if (map[key]) {
-    state.debug[map[key]] = target.value;
-  }
-  if (["debug-player", "debug-random-player", "debug-hand-player", "debug-active-player"].includes(target.id)) {
-    renderInterface();
+
+  if (map[target.id]) {
+    state.debug[map[target.id]] = target.value;
+    if (["debug-player", "debug-hand-player", "debug-active-player"].includes(target.id)) {
+      renderInterface();
+    }
   }
 }
 
@@ -314,96 +328,94 @@ async function handleDocumentClick(event) {
     openRules();
     return;
   }
-
-  if (action === "complete-handoff") {
-    completeHandoff();
+  if (action === "toggle-hand") {
+    state.humanHandVisible = !state.humanHandVisible;
+    renderInterface();
     return;
   }
-
   if (action === "toggle-island") {
-    toggleActiveIsland();
+    state.humanIslandVisible = !state.humanIslandVisible;
+    renderInterface();
     return;
   }
-
   if (action === "draw-card") {
-    await runLocked(takeDrawAction);
+    await runLocked(takeHumanDrawAction);
     return;
   }
-
   if (action === "steal-card") {
-    await runLocked(takeStealAction);
+    await runLocked(takeHumanStealAction);
     return;
   }
-
   if (action === "use-sabotage") {
-    await runLocked(useSabotage);
+    await runLocked(useHumanSabotage);
     return;
   }
-
   if (action === "use-witch") {
-    await runLocked(useWitchHill);
+    await runLocked(useHumanWitchHill);
     return;
   }
-
   if (action === "force-endgame") {
     await runLocked(startEndgame);
     return;
   }
-
   if (action === "reset-game") {
     resetGame();
     return;
   }
-
   if (action.startsWith("debug-")) {
     await runLocked(() => handleDebugAction(action));
   }
 }
 
 function renderNameFields() {
-  nameFields.innerHTML = Array.from({ length: state.selectedPlayerCount }, (_, index) => {
-    const playerNumber = index + 1;
-    return `
-      <div class="field">
-        <label for="player-name-${playerNumber}">Speler ${playerNumber}</label>
-        <input id="player-name-${playerNumber}" data-name-input type="text" placeholder="Speler ${playerNumber}">
-      </div>
-    `;
-  }).join("");
+  nameFields.innerHTML = `
+    <div class="field">
+      <label for="human-name">Jouw naam</label>
+      <input id="human-name" data-name-input type="text" placeholder="Speler 1">
+    </div>
+  `;
 }
 
-function initializeGame(playerCount, names) {
+function initializeGame(playerCount, humanName) {
   nextCardInstanceId = 1;
-  state.players = createPlayers(playerCount, names);
+  state.players = createPlayers(playerCount, humanName, false);
   state.deck = shuffleDeck(generateDeck());
   state.discard = [];
   state.unusedIslands = [];
   state.currentPlayerIndex = 0;
   state.round = 1;
-  state.awaitingHandoff = true;
-  state.processing = false;
   state.currentTurn = { mainActionAvailable: true, sabotageUsed: false };
   state.gameStarted = true;
   state.gameOver = false;
   state.scoringStarted = false;
+  state.processing = false;
+  state.computerRunning = false;
+  state.humanHandVisible = true;
+  state.humanIslandVisible = true;
+  state.metrics = createMetrics();
   state.finalScores = [];
+  state.simulationResults = null;
   state.log = [];
-  dealIslands();
+  dealIslands(state);
   syncDebugDefaults();
-  addLog(`Nieuw spel gestart met ${playerCount} spelers.`);
+  addLog(`Nieuw singleplayer spel gestart met ${playerCount} spelers.`);
   renderInterface();
 }
 
-function createPlayers(playerCount, names) {
-  return Array.from({ length: playerCount }, (_, index) => ({
-    id: `player-${index + 1}`,
-    name: names[index] || `Speler ${index + 1}`,
-    hand: [],
-    advantages: [],
-    island: null,
-    islandRevealed: false,
-    removedByCave: [],
-  }));
+function createPlayers(playerCount, humanName, allComputers) {
+  return Array.from({ length: playerCount }, (_, index) => {
+    const isHuman = !allComputers && index === 0;
+    return {
+      id: `player-${index + 1}`,
+      seat: index + 1,
+      isHuman,
+      name: isHuman ? (humanName || "Speler 1") : `Computer ${allComputers ? index + 1 : index}`,
+      hand: [],
+      advantages: [],
+      island: null,
+      removedByCave: [],
+    };
+  });
 }
 
 function generateDeck() {
@@ -417,20 +429,104 @@ function generateDeck() {
 }
 
 function shuffleDeck(deck) {
-  const shuffled = deck;
-  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+  for (let index = deck.length - 1; index > 0; index -= 1) {
     const randomIndex = Math.floor(Math.random() * (index + 1));
-    [shuffled[index], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[index]];
+    [deck[index], deck[randomIndex]] = [deck[randomIndex], deck[index]];
   }
-  return shuffled;
+  return deck;
 }
 
-function dealIslands() {
+function dealIslands(game) {
   const islandPool = shuffleDeck(ISLAND_DEFINITIONS.map(createIsland));
-  state.players.forEach((player) => {
+  game.players.forEach((player) => {
     player.island = islandPool.shift();
   });
-  state.unusedIslands = islandPool;
+  game.unusedIslands = islandPool;
+}
+
+async function takeHumanDrawAction() {
+  const player = getActivePlayer();
+  if (!player.isHuman || !state.currentTurn.mainActionAvailable) {
+    return;
+  }
+  await drawCard(player);
+  state.currentTurn.mainActionAvailable = false;
+  await finishHumanMainAction();
+}
+
+async function takeHumanStealAction() {
+  const player = getActivePlayer();
+  if (!player.isHuman || !state.currentTurn.mainActionAvailable) {
+    return;
+  }
+
+  const targets = getOtherPlayers(player).filter((target) => target.hand.length > 0);
+  if (targets.length === 0) {
+    addLog("Niemand heeft handkaarten. Je trekt daarom een kaart.");
+    await drawCard(player);
+  } else {
+    const targetId = await choosePlayer("Kaart stelen", targets, "Kies een computerspeler. De kaart wordt willekeurig gekozen.");
+    await stealRandomHandCards(player, getPlayer(targetId), 1);
+  }
+
+  state.currentTurn.mainActionAvailable = false;
+  await finishHumanMainAction();
+}
+
+async function finishHumanMainAction() {
+  if (state.deck.length === 0) {
+    await startEndgame();
+    return;
+  }
+  endTurn();
+  await runComputerTurns();
+}
+
+async function runComputerTurns() {
+  if (state.computerRunning || state.gameOver) {
+    return;
+  }
+
+  state.computerRunning = true;
+  while (state.gameStarted && !state.gameOver && !getActivePlayer().isHuman) {
+    renderInterface();
+    await computerPause();
+    await executeComputerTurn(getActivePlayer());
+    if (state.gameOver || state.scoringStarted) {
+      break;
+    }
+    if (state.deck.length === 0) {
+      await startEndgame();
+      break;
+    }
+    endTurn();
+    await computerPause();
+  }
+  state.computerRunning = false;
+  renderInterface();
+}
+
+async function executeComputerTurn(computerPlayer) {
+  addLog(`${computerPlayer.name} voert zijn beurt uit.`);
+
+  if (canComputerUseSabotage(computerPlayer) && Math.random() < 0.5) {
+    await computerUseSabotage(computerPlayer);
+    await computerPause();
+  }
+
+  if (canComputerUseWitchHill(computerPlayer) && Math.random() < 0.35) {
+    await computerUseWitchHill(computerPlayer);
+    await computerPause();
+  }
+
+  const stealTargets = getOtherPlayers(computerPlayer).filter((target) => target.hand.length > 0);
+  const shouldSteal = stealTargets.length > 0 && Math.random() < 0.35;
+  if (shouldSteal) {
+    const target = chooseRandomItem(stealTargets);
+    await stealRandomHandCards(computerPlayer, target, 1);
+  } else {
+    await drawCard(computerPlayer);
+  }
 }
 
 async function drawCard(player) {
@@ -440,13 +536,30 @@ async function drawCard(player) {
   }
 
   const card = state.deck.shift();
+  logDraw(player, card);
+  await processCard(player, card);
+  return true;
+}
+
+function logDraw(player, card) {
+  if (player.isHuman) {
+    if (card.type === "resource" || card.type === "danger") {
+      addLog(`${player.name} trok een ${card.name}.`);
+    } else if (card.type === "advantage") {
+      addLog(`${player.name} vond een ${card.name}.`);
+    } else {
+      addLog(`${player.name} trok ${card.name}.`);
+    }
+    return;
+  }
+
   if (card.type === "resource" || card.type === "danger") {
-    addLog(`${player.name} trok een verborgen handkaart.`);
+    addLog(`${player.name} trok een verborgen kaart.`);
+  } else if (card.type === "advantage") {
+    addLog(`${player.name} vond een ${card.name}.`);
   } else {
     addLog(`${player.name} trok ${card.name}.`);
   }
-  await processCard(player, card);
-  return true;
 }
 
 async function processCard(player, card) {
@@ -457,12 +570,10 @@ async function processCard(player, card) {
 
   if (card.type === "advantage") {
     player.advantages.push(card);
-    addLog(`${player.name} legt ${card.name} open neer.`);
     return;
   }
 
   if (card.type === "special") {
-    addLog(`${card.name} wordt direct uitgevoerd.`);
     await executeSpecialCard(player, card);
     state.discard.push(card);
   }
@@ -470,7 +581,11 @@ async function processCard(player, card) {
 
 async function executeSpecialCard(player, card) {
   if (card.subtype === "motorboat") {
+    addLog(`${player.name} trekt twee extra kaarten met Motorboot.`);
     await drawCard(player);
+    if (!player.isHuman) {
+      await computerPause();
+    }
     await drawCard(player);
     return;
   }
@@ -481,99 +596,112 @@ async function executeSpecialCard(player, card) {
   }
 
   if (card.subtype === "move") {
-    moveCamp(player);
+    moveCamp(player, state);
   }
-}
-
-function moveCamp(player) {
-  if (!player.island) {
-    return;
-  }
-
-  const oldIsland = player.island;
-  state.unusedIslands.push(oldIsland);
-  let options = shuffleDeck([...state.unusedIslands]);
-  const differentOptions = options.filter((island) => island.key !== oldIsland.key);
-  if (differentOptions.length > 0) {
-    options = differentOptions;
-  }
-
-  const newIsland = options[0];
-  state.unusedIslands = state.unusedIslands.filter((island) => island.key !== newIsland.key);
-  player.island = { ...newIsland, used: false };
-  player.islandRevealed = false;
-  addLog(`${player.name} verplaatst het kamp en krijgt een nieuw geheim eiland.`);
-}
-
-async function stealRandomCard(thief, target, amount = 1) {
-  const stolenCards = [];
-  const stealAmount = Math.min(amount, target.hand.length);
-  for (let index = 0; index < stealAmount; index += 1) {
-    const randomIndex = Math.floor(Math.random() * target.hand.length);
-    const [card] = target.hand.splice(randomIndex, 1);
-    thief.hand.push(card);
-    stolenCards.push(card);
-  }
-  if (stolenCards.length === 1) {
-    addLog(`${thief.name} stal 1 verborgen handkaart van ${target.name}.`);
-  } else {
-    addLog(`${thief.name} stal ${stolenCards.length} verborgen handkaarten van ${target.name}.`);
-  }
-  return stolenCards;
 }
 
 async function executePlunder(player) {
-  const advantageTargets = state.players
-    .filter((target) => target.id !== player.id)
+  const advantageTargets = getOtherPlayers(player)
     .flatMap((target) => target.advantages.map((card) => ({ target, card })));
-  const handTargets = state.players.filter((target) => target.id !== player.id && target.hand.length > 0);
+  const handTargets = getOtherPlayers(player).filter((target) => target.hand.length > 0);
 
   if (advantageTargets.length === 0 && handTargets.length === 0) {
     addLog("Plundertocht vindt geen buit.");
     return;
   }
 
-  const plunderMode = await showChoice("Plundertocht", "Kies wat je wilt stelen.", [
-    {
+  if (!player.isHuman) {
+    await executeComputerPlunder(player, advantageTargets, handTargets);
+    return;
+  }
+
+  const options = [];
+  if (advantageTargets.length > 0) {
+    options.push({
       label: "Open voordeelkaart stelen",
       description: `${advantageTargets.length} beschikbare voordeelkaart(en).`,
       value: "advantage",
-      disabled: advantageTargets.length === 0,
-    },
-    {
+    });
+  }
+  if (handTargets.length > 0) {
+    options.push({
       label: "Drie handkaarten stelen",
-      description: `${handTargets.length} speler(s) met verborgen handkaarten.`,
+      description: `${handTargets.length} computerspeler(s) met verborgen handkaarten.`,
       value: "hand",
-      disabled: handTargets.length === 0,
-    },
-  ]);
+    });
+  }
 
-  if (plunderMode === "advantage") {
-    const choice = await showChoice("Voordeelkaart stelen", "Kies één open voordeelkaart.", advantageTargets.map(({ target, card }) => ({
+  const choice = await showChoice("Plundertocht", "Kies wat je wilt stelen.", options);
+  if (choice === "advantage") {
+    const stolen = await showChoice("Voordeelkaart stelen", "Kies één open voordeelkaart.", advantageTargets.map(({ target, card }) => ({
       label: `${target.name}: ${card.name}`,
       description: card.description,
       value: { targetId: target.id, cardId: card.id },
     })));
-    const target = getPlayer(choice.targetId);
-    const cardIndex = target.advantages.findIndex((card) => card.id === choice.cardId);
-    if (cardIndex >= 0) {
-      const [card] = target.advantages.splice(cardIndex, 1);
-      player.advantages.push(card);
-      addLog(`${player.name} stal ${card.name} van ${target.name}.`);
-    }
-    return;
-  }
-
-  if (plunderMode === "hand") {
-    const targetId = await choosePlayer("Handkaarten stelen", handTargets, "Kies een speler. Je steelt willekeurig maximaal drie handkaarten.");
-    const target = getPlayer(targetId);
-    await stealRandomCard(player, target, 3);
+    stealAdvantageCard(player, getPlayer(stolen.targetId), stolen.cardId);
+  } else {
+    const targetId = await choosePlayer("Handkaarten stelen", handTargets, "Kies een computerspeler. Je steelt willekeurig maximaal drie handkaarten.");
+    await stealRandomHandCards(player, getPlayer(targetId), 3);
   }
 }
 
-async function useSabotage() {
+async function executeComputerPlunder(player, advantageTargets, handTargets) {
+  let mode = null;
+  if (advantageTargets.length > 0 && handTargets.length > 0) {
+    mode = Math.random() < 0.5 ? "advantage" : "hand";
+  } else if (advantageTargets.length > 0) {
+    mode = "advantage";
+  } else {
+    mode = "hand";
+  }
+
+  if (mode === "advantage") {
+    const { target, card } = chooseRandomItem(advantageTargets);
+    stealAdvantageCard(player, target, card.id);
+  } else {
+    const target = chooseRandomItem(handTargets);
+    await stealRandomHandCards(player, target, 3);
+  }
+}
+
+function stealAdvantageCard(thief, target, cardId) {
+  const cardIndex = target.advantages.findIndex((card) => card.id === Number(cardId));
+  if (cardIndex < 0) {
+    return null;
+  }
+  const [card] = target.advantages.splice(cardIndex, 1);
+  thief.advantages.push(card);
+  addLog(`${thief.name} stal ${card.name} van ${target.name}.`);
+  return card;
+}
+
+async function stealRandomHandCards(thief, target, amount) {
+  const stolenCards = [];
+  const stealAmount = Math.min(amount, target.hand.length);
+
+  for (let index = 0; index < stealAmount; index += 1) {
+    const randomIndex = Math.floor(Math.random() * target.hand.length);
+    const [card] = target.hand.splice(randomIndex, 1);
+    thief.hand.push(card);
+    stolenCards.push(card);
+  }
+
+  if (stolenCards.length === 0) {
+    addLog(`${thief.name} kon geen handkaart stelen van ${target.name}.`);
+  } else if (thief.isHuman) {
+    addLog(`${thief.name} stal ${formatCardNames(stolenCards)} van ${target.name}.`);
+  } else if (stolenCards.length === 1) {
+    addLog(`${thief.name} stal een willekeurige kaart van ${target.name}.`);
+  } else {
+    addLog(`${thief.name} stal ${stolenCards.length} willekeurige kaarten van ${target.name}.`);
+  }
+
+  return stolenCards;
+}
+
+async function useHumanSabotage() {
   const player = getActivePlayer();
-  if (!canUseSabotage(player)) {
+  if (!canHumanUseSabotage(player)) {
     return;
   }
 
@@ -581,27 +709,37 @@ async function useSabotage() {
   if (!dangerCard) {
     return;
   }
-
-  const targetId = await choosePlayer("Sabotage", getOtherPlayers(player), "Kies de speler die de ramp krijgt.");
-  if (!targetId) {
+  const targetId = await choosePlayer("Sabotage", getOtherPlayers(player), "Kies de computerspeler die de ramp krijgt.");
+  const sabotageCard = removeFirstAdvantage(player, "sabotage");
+  if (!sabotageCard) {
     return;
   }
 
-  const sabotageIndex = player.advantages.findIndex((card) => card.subtype === "sabotage");
-  if (sabotageIndex < 0) {
-    return;
-  }
-
-  const [sabotageCard] = player.advantages.splice(sabotageIndex, 1);
   state.discard.push(sabotageCard);
   state.currentTurn.sabotageUsed = true;
+  state.metrics.sabotageUsed += 1;
   await handleMirrorReaction(player, getPlayer(targetId), dangerCard, "Sabotage");
-  addLog(`${player.name} gebruikte Sabotage.`);
+  addLog(`${player.name} gebruikte Sabotage tegen ${getPlayer(targetId).name}.`);
 }
 
-async function useWitchHill() {
+async function computerUseSabotage(computerPlayer) {
+  const dangerCard = chooseRandomItem(computerPlayer.hand.filter((card) => card.type === "danger"));
+  const target = chooseRandomTarget(computerPlayer, state.players);
+  const sabotageCard = removeFirstAdvantage(computerPlayer, "sabotage");
+  if (!dangerCard || !target || !sabotageCard) {
+    return;
+  }
+
+  state.discard.push(sabotageCard);
+  state.currentTurn.sabotageUsed = true;
+  state.metrics.sabotageUsed += 1;
+  addLog(`${computerPlayer.name} gebruikte Sabotage tegen ${target.name}.`);
+  await handleMirrorReaction(computerPlayer, target, dangerCard, "Sabotage");
+}
+
+async function useHumanWitchHill() {
   const player = getActivePlayer();
-  if (!canUseWitchHill(player)) {
+  if (!canHumanUseWitchHill(player)) {
     return;
   }
 
@@ -609,58 +747,36 @@ async function useWitchHill() {
   if (!dangerCard) {
     return;
   }
-
-  const targetId = await choosePlayer("De Heksenheuvel", getOtherPlayers(player), "Kies de speler die de ramp krijgt.");
-  if (!targetId) {
-    return;
-  }
-
-  await handleMirrorReaction(player, getPlayer(targetId), dangerCard, "De Heksenheuvel");
+  const targetId = await choosePlayer("De Heksenheuvel", getOtherPlayers(player), "Kies de computerspeler die de ramp krijgt.");
   player.island.used = true;
+  await handleMirrorReaction(player, getPlayer(targetId), dangerCard, "De Heksenheuvel");
   addLog(`${player.name} gebruikte De Heksenheuvel.`);
 }
 
+async function computerUseWitchHill(computerPlayer) {
+  const dangerCard = chooseRandomItem(computerPlayer.hand.filter((card) => card.type === "danger"));
+  const target = chooseRandomTarget(computerPlayer, state.players);
+  if (!dangerCard || !target) {
+    return;
+  }
+
+  computerPlayer.island.used = true;
+  addLog(`${computerPlayer.name} gebruikte De Heksenheuvel.`);
+  await handleMirrorReaction(computerPlayer, target, dangerCard, "De Heksenheuvel");
+}
+
 async function handleMirrorReaction(attacker, target, dangerCard, sourceName) {
-  const targetHasMirror = target.island?.effectType === "mirror" && !target.island.used;
-  if (targetHasMirror) {
-    const mirrorChoice = await showChoice(`De Spiegel van ${target.name}`, `${sourceName} probeert ${target.name} een ${dangerCard.name} te geven. Geef het scherm aan ${target.name}.`, [
-      {
-        label: "Nee, ramp accepteren",
-        description: `${dangerCard.name} gaat naar je hand.`,
-        value: "accept",
-      },
-      {
-        label: "Ja, De Spiegel gebruiken",
-        description: "Weiger de ramp en geef een ramp terug.",
-        value: "mirror",
-      },
-    ]);
+  state.metrics.disastersPassed += 1;
 
-    if (mirrorChoice === "mirror") {
-      const ownDangers = target.hand.filter((card) => card.type === "danger");
-      const returnChoice = await showChoice("De Spiegel", "Kies welke ramp teruggaat naar de aanvaller.", [
-        {
-          label: `De aangeboden ${dangerCard.name} teruggeven`,
-          description: `${dangerCard.name} blijft bij ${attacker.name}.`,
-          value: { mode: "same" },
-        },
-        ...ownDangers.map((card) => ({
-          label: `Eigen ${card.name} teruggeven`,
-          description: "Deze ramp verdwijnt uit je hand.",
-          value: { mode: "own", cardId: card.id },
-        })),
-      ]);
+  if (target.island?.effectType === "mirror" && !target.island.used) {
+    const usesMirror = target.isHuman
+      ? await askHumanMirrorChoice(attacker, target, dangerCard, sourceName)
+      : Math.random() < 0.6;
 
+    if (usesMirror) {
+      await resolveMirrorReturn(attacker, target, dangerCard);
       target.island.used = true;
-      if (returnChoice.mode === "own") {
-        const returned = removeCardFromHand(target, returnChoice.cardId);
-        if (returned) {
-          attacker.hand.push(returned);
-          addLog(`${target.name} gebruikte De Spiegel en gaf een eigen ramp terug aan ${attacker.name}.`);
-        }
-      } else {
-        addLog(`${target.name} gebruikte De Spiegel en stuurde de aangeboden ramp terug.`);
-      }
+      state.metrics.mirrorUsed += 1;
       return { accepted: false, mirrored: true };
     }
   }
@@ -668,59 +784,71 @@ async function handleMirrorReaction(attacker, target, dangerCard, sourceName) {
   const transferred = removeCardFromHand(attacker, dangerCard.id);
   if (transferred) {
     target.hand.push(transferred);
-    addLog(`${target.name} kreeg een verborgen rampkaart van ${attacker.name}.`);
+    addLog(`${target.name} kreeg een ${transferred.name} van ${attacker.name}.`);
     return { accepted: true, mirrored: false };
   }
+
   return { accepted: false, mirrored: false };
 }
 
-async function takeDrawAction() {
-  if (!state.currentTurn.mainActionAvailable) {
-    return;
-  }
-  const player = getActivePlayer();
-  await drawCard(player);
-  state.currentTurn.mainActionAvailable = false;
-  await finishMainAction();
+async function askHumanMirrorChoice(attacker, target, dangerCard, sourceName) {
+  const choice = await showChoice(`De Spiegel van ${target.name}`, `${sourceName} probeert jou een ${dangerCard.name} te geven.`, [
+    {
+      label: "Nee, ramp accepteren",
+      description: `${dangerCard.name} gaat naar je hand.`,
+      value: "accept",
+    },
+    {
+      label: "Ja, De Spiegel gebruiken",
+      description: "Weiger de ramp en geef een ramp terug.",
+      value: "mirror",
+    },
+  ]);
+  return choice === "mirror";
 }
 
-async function takeStealAction() {
-  if (!state.currentTurn.mainActionAvailable) {
-    return;
+async function resolveMirrorReturn(attacker, target, dangerCard) {
+  const ownDangers = target.hand.filter((card) => card.type === "danger");
+  let returnChoice = { mode: "same" };
+
+  if (target.isHuman) {
+    returnChoice = await showChoice("De Spiegel", "Kies welke ramp teruggaat naar de aanvaller.", [
+      {
+        label: `De aangeboden ${dangerCard.name} teruggeven`,
+        description: `${dangerCard.name} blijft bij ${attacker.name}.`,
+        value: { mode: "same" },
+      },
+      ...ownDangers.map((card) => ({
+        label: `Eigen ${card.name} teruggeven`,
+        description: "Deze ramp verdwijnt uit je hand.",
+        value: { mode: "own", cardId: card.id },
+      })),
+    ]);
+  } else if (ownDangers.length > 0 && Math.random() < 0.5) {
+    returnChoice = { mode: "own", cardId: chooseRandomItem(ownDangers).id };
   }
-  const player = getActivePlayer();
-  const targets = getOtherPlayers(player).filter((target) => target.hand.length > 0);
-  if (targets.length === 0) {
-    addLog("Niemand heeft handkaarten. De actieve speler moet trekken.");
-    await drawCard(player);
+
+  if (returnChoice.mode === "own") {
+    const returned = removeCardFromHand(target, returnChoice.cardId);
+    if (returned) {
+      attacker.hand.push(returned);
+      addLog(`${target.name} gebruikte De Spiegel en gaf een ${returned.name} terug aan ${attacker.name}.`);
+    }
   } else {
-    const targetId = await choosePlayer("Kaart stelen", targets, "Kies een speler. De kaart wordt willekeurig gekozen.");
-    await stealRandomCard(player, getPlayer(targetId), 1);
+    addLog(`${target.name} gebruikte De Spiegel en gaf de ${dangerCard.name} terug aan ${attacker.name}.`);
   }
-  state.currentTurn.mainActionAvailable = false;
-  await finishMainAction();
-}
-
-async function finishMainAction() {
-  if (state.deck.length === 0) {
-    await startEndgame();
-    return;
-  }
-  endTurn();
 }
 
 function endTurn() {
-  state.players.forEach((player) => {
-    player.islandRevealed = false;
-  });
   const previousIndex = state.currentPlayerIndex;
   state.currentPlayerIndex = (state.currentPlayerIndex + 1) % state.players.length;
   if (state.currentPlayerIndex <= previousIndex) {
     state.round += 1;
   }
   state.currentTurn = { mainActionAvailable: true, sabotageUsed: false };
-  state.awaitingHandoff = true;
-  addLog(`Beurt door naar ${getActivePlayer().name}.`);
+
+  const active = getActivePlayer();
+  addLog(active.isHuman ? `${active.name} is weer aan de beurt.` : `${active.name} is aan de beurt.`);
   syncDebugDefaults();
   renderInterface();
 }
@@ -731,62 +859,72 @@ async function startEndgame() {
   }
 
   state.scoringStarted = true;
-  state.awaitingHandoff = false;
-  state.players.forEach((player) => {
-    player.islandRevealed = false;
-    player.removedByCave = [];
-  });
+  state.computerRunning = false;
   addLog("Het eindspel is gestart.");
 
   for (const player of state.players) {
-    if (player.island?.effectType === "cave") {
-      const dangers = player.hand.filter((card) => card.type === "danger");
-      if (dangers.length > 0) {
-        const choice = await showChoice(`De Grot: ${player.name}`, `Geef het scherm aan ${player.name}. Kies eventueel één ramp om weg te leggen.`, [
-          {
-            label: "Geen ramp wegleggen",
-            description: "Alle rampen blijven in je hand.",
-            value: null,
-          },
-          ...dangers.map((card) => ({
-            label: card.name,
-            description: card.description,
-            value: card.id,
-          })),
-        ]);
-        if (choice) {
-          const removed = removeCardFromHand(player, choice);
-          if (removed) {
-            state.discard.push(removed);
-            player.removedByCave.push(removed);
-            player.island.used = true;
-            addLog(`${player.name} legde met De Grot één ramp weg.`);
-          }
-        }
+    player.removedByCave = [];
+    if (player.island?.effectType !== "cave") {
+      continue;
+    }
+
+    const dangers = player.hand.filter((card) => card.type === "danger");
+    if (dangers.length === 0) {
+      continue;
+    }
+
+    if (player.isHuman) {
+      const choice = await showChoice("De Grot", "Kies eventueel één ramp om weg te leggen voordat rampen worden verwerkt.", [
+        {
+          label: "Geen ramp wegleggen",
+          description: "Alle rampen blijven in je hand.",
+          value: null,
+        },
+        ...dangers.map((card) => ({
+          label: card.name,
+          description: card.description,
+          value: card.id,
+        })),
+      ]);
+      if (choice) {
+        removeDangerWithCave(player, choice, state);
       }
+    } else {
+      removeDangerWithCave(player, chooseRandomItem(dangers).id, state);
     }
   }
 
-  state.finalScores = calculateFinalScore();
+  state.finalScores = calculateFinalScore(state, state.metrics);
   state.gameOver = true;
   state.gameStarted = false;
   renderInterface();
 }
 
-function neutralizeDisasters(player) {
+function removeDangerWithCave(player, cardId, game) {
+  const removed = removeCardFromHand(player, cardId);
+  if (!removed) {
+    return null;
+  }
+  player.removedByCave.push(removed);
+  player.island.used = true;
+  game.discard.push(removed);
+  game.metrics.caveRemoved += 1;
+  addGameLog(game, `${player.name} verwijderde met De Grot een ramp.`);
+  return removed;
+}
+
+function neutralizeDisasters(player, metrics) {
   const protectionCounts = countBySubtype(player.advantages);
   const dangers = player.hand.filter((card) => card.type === "danger");
   const neutralized = [];
   const pending = [];
 
   dangers.forEach((danger) => {
-    const protectionSubtype = PROTECTION_MAP[danger.subtype];
-    if (protectionSubtype && protectionCounts[protectionSubtype] > 0) {
-      protectionCounts[protectionSubtype] -= 1;
-      neutralized.push({
-        danger,
-        by: getCardDefinitionBySubtype(protectionSubtype)?.name || "Voordeelkaart",
-      });
+    const protection = PROTECTION_MAP[danger.subtype];
+    if (protection && protectionCounts[protection.advantage] > 0) {
+      protectionCounts[protection.advantage] -= 1;
+      neutralized.push({ danger, by: protection.label });
+      metrics.neutralized[danger.subtype] += 1;
     } else {
       pending.push(danger);
     }
@@ -802,24 +940,18 @@ function applyDisasters(startResources, pendingDangers) {
   pendingDangers.forEach((danger) => {
     const effect = DISASTER_EFFECTS[danger.subtype];
     if (!effect || !effect.resource) {
-      executed.push({
-        danger,
-        effect: effect?.text || "Geen effect.",
-      });
+      executed.push({ danger, effect: effect?.text || "Geen effect." });
       return;
     }
-    const before = remaining[effect.resource];
-    remaining[effect.resource] = Math.max(0, before - effect.amount);
-    executed.push({
-      danger,
-      effect: effect.text,
-    });
+
+    remaining[effect.resource] = Math.max(0, remaining[effect.resource] - effect.amount);
+    executed.push({ danger, effect: effect.text });
   });
 
   return { remaining, executed };
 }
 
-function calculateIslandBonus(player, remainingResources) {
+function calculateIslandBonus(player, remainingResources, metrics) {
   let woodScore = remainingResources.wood;
   let fishScore = remainingResources.fish;
   let waterScore = remainingResources.water;
@@ -842,6 +974,9 @@ function calculateIslandBonus(player, remainingResources) {
     const hasSet = remainingResources.wood >= 1 && remainingResources.fish >= 1 && remainingResources.water >= 1;
     bonusPoints = hasSet ? 3 : 0;
     islandBonus = hasSet ? "Voedselbos geeft 3 bonuspunten." : "Voedselbos bonus niet gehaald.";
+    if (hasSet) {
+      metrics.foodBonus += 1;
+    }
   }
 
   return {
@@ -854,15 +989,17 @@ function calculateIslandBonus(player, remainingResources) {
   };
 }
 
-function calculateFinalScore() {
-  return state.players.map((player) => {
+function calculateFinalScore(game, metrics) {
+  return game.players.map((player) => {
     const startResources = countResources(player.hand);
-    const { neutralized, pending } = neutralizeDisasters(player);
+    const { neutralized, pending } = neutralizeDisasters(player, metrics);
     const { remaining, executed } = applyDisasters(startResources, pending);
-    const islandScore = calculateIslandBonus(player, remaining);
+    const islandScore = calculateIslandBonus(player, remaining, metrics);
 
     return {
+      playerId: player.id,
       playerName: player.name,
+      islandKey: player.island.key,
       islandName: player.island.name,
       startResources,
       rampCards: player.hand.filter((card) => card.type === "danger").map((card) => card.name),
@@ -883,12 +1020,13 @@ function renderInterface() {
 
   if (state.gameStarted && !state.gameOver) {
     renderGameStatus();
-    renderHandoff();
+    renderTurnPanel();
     renderPrivatePanel();
     renderActionPanel();
     renderPlayersOverview();
     renderLog();
     renderDebugPanel();
+    setSelectValue("computer-speed", state.computerSpeed);
   }
 
   if (state.gameOver) {
@@ -898,112 +1036,126 @@ function renderInterface() {
 
 function renderGameStatus() {
   const active = getActivePlayer();
+  const phase = active.isHuman ? "Jouw beurt" : "Computerbeurten";
   document.getElementById("game-status").innerHTML = `
     <article class="status-card">
       <span class="status-label">Actieve speler</span>
       <strong class="status-value">${escapeHtml(active.name)}</strong>
     </article>
     <article class="status-card">
-      <span class="status-label">Ronde</span>
-      <strong class="status-value">${state.round}</strong>
+      <span class="status-label">Fase</span>
+      <strong class="status-value">${phase}</strong>
     </article>
     <article class="status-card">
       <span class="status-label">Trekstapel</span>
       <strong class="status-value">${state.deck.length}</strong>
     </article>
     <article class="status-card">
-      <span class="status-label">Aflegstapel</span>
-      <strong class="status-value">${state.discard.length}</strong>
+      <span class="status-label">Ronde ${state.round}</span>
+      <strong class="status-value">${state.discard.length} afgelegd</strong>
     </article>
   `;
 }
 
-function renderHandoff() {
-  const panel = document.getElementById("handoff-panel");
-  panel.classList.toggle("is-visible", state.awaitingHandoff);
-  if (!state.awaitingHandoff) {
-    panel.innerHTML = "";
-    return;
+function renderTurnPanel() {
+  const active = getActivePlayer();
+  const panel = document.getElementById("turn-panel");
+  if (active.isHuman) {
+    panel.innerHTML = `
+      <h2>${escapeHtml(active.name)}, jij bent aan zet</h2>
+      <p>Kies eventueel een extra actie en daarna precies één hoofdactie.</p>
+    `;
+  } else {
+    panel.innerHTML = `
+      <h2>${escapeHtml(active.name)} speelt automatisch</h2>
+      <p>Computerbeurten worden achter elkaar uitgevoerd totdat jij weer aan de beurt bent.</p>
+    `;
   }
-  panel.innerHTML = `
-    <div class="handoff-card">
-      <h2>Geef het scherm aan ${escapeHtml(getActivePlayer().name)}</h2>
-      <p>Handkaarten en eilandinformatie blijven verborgen totdat de actieve speler klaar is.</p>
-      <button type="button" class="primary-button" data-action="complete-handoff">Ik ben klaar</button>
-    </div>
-  `;
 }
 
 function renderPrivatePanel() {
-  const panel = document.getElementById("private-panel");
-  panel.classList.toggle("is-hidden", state.awaitingHandoff);
-  if (state.awaitingHandoff) {
-    panel.innerHTML = "";
+  const human = state.players.find((player) => player.isHuman);
+  if (!human) {
     return;
   }
 
-  const player = getActivePlayer();
-  const islandHtml = player.islandRevealed
-    ? renderCard({ ...player.island, type: "island" })
-    : `<div class="card card-island">
-        <span class="card-icon">🏝️</span>
-        <div class="card-name">Geheim eiland</div>
-        <div class="card-type">Eiland</div>
-        <p class="card-description">Verborgen totdat jij het bekijkt.</p>
-      </div>`;
+  const handHtml = state.humanHandVisible
+    ? (human.hand.length ? human.hand.map(renderCard).join("") : `<p class="muted-text">Je hebt nog geen handkaarten.</p>`)
+    : `<div class="card"><span class="card-icon">🂠</span><div class="card-name">Hand verborgen</div><div class="card-type">Privé</div><p class="card-description">${human.hand.length} kaart(en).</p></div>`;
+  const islandHtml = state.humanIslandVisible
+    ? renderCard({ ...human.island, type: "island" })
+    : `<div class="card card-island"><span class="card-icon">🏝️</span><div class="card-name">Eiland verborgen</div><div class="card-type">Eiland</div><p class="card-description">Gebruik de knop om je eiland te bekijken.</p></div>`;
+  const advantagesHtml = human.advantages.length
+    ? human.advantages.map(renderCard).join("")
+    : `<p class="muted-text">Je hebt nog geen open voordeelkaarten.</p>`;
 
-  panel.innerHTML = `
+  document.getElementById("private-panel").innerHTML = `
     <div class="private-grid">
       <section class="private-box">
         <div class="section-heading">
           <h2>Jouw hand</h2>
-          <span class="pill">${player.hand.length} kaart(en)</span>
+          <button type="button" class="secondary-button" data-action="toggle-hand">${state.humanHandVisible ? "Hand verbergen" : "Bekijk mijn hand"}</button>
         </div>
-        <div class="hand-grid">
-          ${player.hand.length ? player.hand.map(renderCard).join("") : `<p class="muted-text">Je hebt nog geen verborgen handkaarten.</p>`}
-        </div>
+        <div class="hand-grid">${handHtml}</div>
       </section>
       <section class="private-box">
         <div class="section-heading">
           <h2>Jouw eiland</h2>
-          <button type="button" class="secondary-button" data-action="toggle-island">
-            ${player.islandRevealed ? "Eiland verbergen" : "Bekijk mijn eiland"}
-          </button>
+          <button type="button" class="secondary-button" data-action="toggle-island">${state.humanIslandVisible ? "Eiland verbergen" : "Bekijk mijn eiland"}</button>
         </div>
         <div class="island-grid">${islandHtml}</div>
       </section>
     </div>
+    <section class="private-box" style="margin-top: 16px;">
+      <div class="section-heading">
+        <h2>Jouw voordeelkaarten</h2>
+        <span class="pill">${human.advantages.length} open</span>
+      </div>
+      <div class="advantage-grid">${advantagesHtml}</div>
+    </section>
   `;
 }
 
 function renderActionPanel() {
   const panel = document.getElementById("action-panel");
-  panel.classList.toggle("is-hidden", state.awaitingHandoff);
-  if (state.awaitingHandoff) {
-    panel.innerHTML = "";
+  const player = getActivePlayer();
+
+  if (!player.isHuman) {
+    panel.innerHTML = `
+      <section class="actions-box">
+        <h2>Computerbeurten bezig</h2>
+        <p class="muted-text">Volg de gebeurtenissen in het logboek.</p>
+      </section>
+    `;
     return;
   }
 
-  const player = getActivePlayer();
-  const mainDisabled = state.processing || !state.currentTurn.mainActionAvailable;
-  const sabotageDisabled = state.processing || !canUseSabotage(player);
-  const witchDisabled = state.processing || !canUseWitchHill(player);
+  const mainActions = [];
+  if (state.currentTurn.mainActionAvailable && state.deck.length > 0) {
+    mainActions.push(`<button type="button" class="primary-button" data-action="draw-card">Trek een kaart</button>`);
+  }
+  if (state.currentTurn.mainActionAvailable && getOtherPlayers(player).some((target) => target.hand.length > 0)) {
+    mainActions.push(`<button type="button" class="secondary-button" data-action="steal-card">Steel een kaart</button>`);
+  }
+
+  const extraActions = [];
+  if (canHumanUseSabotage(player)) {
+    extraActions.push(`<button type="button" class="secondary-button" data-action="use-sabotage">Gebruik Sabotage</button>`);
+  }
+  if (canHumanUseWitchHill(player)) {
+    extraActions.push(`<button type="button" class="secondary-button" data-action="use-witch">Gebruik De Heksenheuvel</button>`);
+  }
+
   panel.innerHTML = `
     <section class="actions-box">
-      <h2>Beschikbare acties</h2>
+      <h2>Acties</h2>
       <div>
         <h3>Hoofdactie</h3>
-        <div class="action-row">
-          <button type="button" class="primary-button" data-action="draw-card" ${mainDisabled ? "disabled" : ""}>Kaart trekken</button>
-          <button type="button" class="secondary-button" data-action="steal-card" ${mainDisabled ? "disabled" : ""}>Kaart stelen</button>
-        </div>
+        <div class="action-row">${mainActions.join("") || `<p class="muted-text">Geen hoofdactie beschikbaar.</p>`}</div>
       </div>
       <div>
         <h3>Extra actie</h3>
-        <div class="action-row">
-          <button type="button" class="secondary-button" data-action="use-sabotage" ${sabotageDisabled ? "disabled" : ""}>Sabotage gebruiken</button>
-          <button type="button" class="secondary-button" data-action="use-witch" ${witchDisabled ? "disabled" : ""}>Heksenheuvel gebruiken</button>
-        </div>
+        <div class="action-row">${extraActions.join("") || `<p class="muted-text">Geen extra actie beschikbaar.</p>`}</div>
       </div>
     </section>
   `;
@@ -1015,16 +1167,19 @@ function renderPlayersOverview() {
     const advantages = player.advantages.length
       ? player.advantages.map((card) => `<li class="pill">${escapeHtml(card.icon)} ${escapeHtml(card.name)}</li>`).join("")
       : `<li class="pill">Geen voordeelkaarten</li>`;
-    const islandStatus = player.island?.used ? "Gebruikt" : "Niet gebruikt";
+    const islandLabel = player.isHuman ? player.island.name : "Verborgen";
+    const powerStatus = getIslandPowerStatus(player);
+
     return `
       <article class="player-card ${isActive ? "is-active" : ""}">
         <h3>
           <span>${escapeHtml(player.name)}</span>
+          ${player.isHuman ? `<span class="pill">Jij</span>` : ""}
           ${isActive ? `<span class="pill">Actief</span>` : ""}
         </h3>
-        <p><strong>${player.hand.length}</strong> verborgen handkaart(en)</p>
-        <p>Geheim eiland: verborgen</p>
-        <p>Eenmalige eilandkracht: <strong>${islandStatus}</strong></p>
+        <p><strong>${player.hand.length}</strong> handkaart(en)</p>
+        <p>Eiland: <strong>${escapeHtml(islandLabel)}</strong></p>
+        <p>Eilandkracht: <strong>${escapeHtml(powerStatus)}</strong></p>
         <ul class="pill-list">${advantages}</ul>
       </article>
     `;
@@ -1033,7 +1188,7 @@ function renderPlayersOverview() {
 
 function renderLog() {
   document.getElementById("event-log").innerHTML = state.log
-    .slice(-12)
+    .slice(-18)
     .reverse()
     .map((entry) => `<li>${escapeHtml(entry)}</li>`)
     .join("");
@@ -1041,7 +1196,7 @@ function renderLog() {
 
 function renderDebugPanel() {
   syncDebugDefaults();
-  const playersOptions = state.players.map((player) => `<option value="${player.id}">${escapeHtml(player.name)}</option>`).join("");
+  const playerOptions = state.players.map((player) => `<option value="${player.id}">${escapeHtml(player.name)}</option>`).join("");
   const cardOptions = CARD_DEFINITIONS.map((card) => `<option value="${card.key}">${escapeHtml(card.name)} (${CARD_TYPE_LABELS[card.type]})</option>`).join("");
   const advantageOptions = CARD_DEFINITIONS
     .filter((card) => card.type === "advantage")
@@ -1052,13 +1207,12 @@ function renderDebugPanel() {
   const handOptions = handPlayer.hand.length
     ? handPlayer.hand.map((card) => `<option value="${card.id}">${escapeHtml(card.name)} (${card.id})</option>`).join("")
     : `<option value="">Geen handkaarten</option>`;
-  const deckList = state.deck.map((card, index) => `${index + 1}. ${card.icon} ${card.name} (${CARD_TYPE_LABELS[card.type]})`).join("\n");
 
   document.getElementById("debug-content").innerHTML = `
     <div class="debug-grid">
       <section class="debug-group">
         <h3>Kaart geven</h3>
-        <select id="debug-player">${playersOptions}</select>
+        <select id="debug-player">${playerOptions}</select>
         <select id="debug-card">${cardOptions}</select>
         <div class="debug-actions">
           <button type="button" class="secondary-button" data-action="debug-give-card">Specifieke kaart geven</button>
@@ -1068,7 +1222,7 @@ function renderDebugPanel() {
 
       <section class="debug-group">
         <h3>Handkaart verwijderen</h3>
-        <select id="debug-hand-player">${playersOptions}</select>
+        <select id="debug-hand-player">${playerOptions}</select>
         <select id="debug-hand-card">${handOptions}</select>
         <button type="button" class="secondary-button" data-action="debug-remove-hand-card" ${handPlayer.hand.length ? "" : "disabled"}>Kaart uit hand verwijderen</button>
       </section>
@@ -1091,25 +1245,36 @@ function renderDebugPanel() {
       </section>
 
       <section class="debug-group">
-        <h3>Trekstapel</h3>
+        <h3>Trekstapel sturen</h3>
+        <p class="muted-text">Trekstapel: ${state.deck.length} kaart(en). De volgorde blijft in de normale interface verborgen.</p>
         <select id="debug-top-card">${cardOptions}</select>
         <div class="debug-actions">
           <button type="button" class="secondary-button" data-action="debug-top-card">Kaart bovenop leggen</button>
           <button type="button" class="secondary-button" data-action="debug-shuffle-deck">Trekstapel schudden</button>
         </div>
-        <pre class="deck-view">${escapeHtml(deckList || "Trekstapel is leeg.")}</pre>
       </section>
 
       <section class="debug-group">
         <h3>Spel sturen</h3>
-        <select id="debug-active-player">${playersOptions}</select>
+        <select id="debug-active-player">${playerOptions}</select>
         <div class="debug-actions">
           <button type="button" class="secondary-button" data-action="debug-set-active-player">Actieve speler wijzigen</button>
           <button type="button" class="danger-button" data-action="debug-start-endgame">Eindspel starten</button>
           <button type="button" class="ghost-button" data-action="debug-reset-game">Reset</button>
         </div>
       </section>
+
+      <section class="debug-group">
+        <h3>Simulatiemodus</h3>
+        <select id="debug-simulation-games">
+          <option value="10">10 potjes simuleren</option>
+          <option value="100">100 potjes simuleren</option>
+          <option value="1000">1.000 potjes simuleren</option>
+        </select>
+        <button type="button" class="primary-button" data-action="debug-run-simulation">Simulatie draaien</button>
+      </section>
     </div>
+    ${renderSimulationResults()}
   `;
 
   setSelectValue("debug-player", state.debug.playerId);
@@ -1121,6 +1286,65 @@ function renderDebugPanel() {
   setSelectValue("debug-island-used", state.debug.islandUsed);
   setSelectValue("debug-active-player", state.debug.activePlayerId);
   setSelectValue("debug-top-card", state.debug.topCardKey);
+  setSelectValue("debug-simulation-games", state.debug.simulationGames);
+}
+
+function renderSimulationResults() {
+  const results = state.simulationResults;
+  if (!results) {
+    return "";
+  }
+
+  const islandRows = results.islandStats.map((row) => `
+    <tr>
+      <td>${escapeHtml(row.name)}</td>
+      <td>${row.wins}</td>
+      <td>${row.winRate}%</td>
+      <td>${row.averageScore}</td>
+    </tr>
+  `).join("");
+  const playerRows = results.averageScoreByPlayer.map((row) => `
+    <tr>
+      <td>${escapeHtml(row.name)}</td>
+      <td>${row.averageScore}</td>
+    </tr>
+  `).join("");
+  const neutralizedRows = Object.entries(results.neutralized).map(([key, value]) => `
+    <tr>
+      <td>${escapeHtml(getCardDefinitionBySubtype(key)?.name || key)}</td>
+      <td>${value}</td>
+    </tr>
+  `).join("");
+
+  return `
+    <section class="simulation-results">
+      <h3>Simulatieresultaten (${results.games} potjes, ${results.playerCount} spelers)</h3>
+      <table class="stats-table">
+        <thead><tr><th>Eiland</th><th>Wins</th><th>Win%</th><th>Gem. score</th></tr></thead>
+        <tbody>${islandRows}</tbody>
+      </table>
+      <table class="stats-table">
+        <thead><tr><th>Spelerpositie</th><th>Gem. score</th></tr></thead>
+        <tbody>${playerRows}</tbody>
+      </table>
+      <table class="stats-table">
+        <thead><tr><th>Statistiek</th><th>Waarde</th></tr></thead>
+        <tbody>
+          <tr><td>Hoogste score</td><td>${results.highestScore}</td></tr>
+          <tr><td>Laagste score</td><td>${results.lowestScore}</td></tr>
+          <tr><td>Gemiddeld gebruikte Sabotagekaarten</td><td>${results.averageSabotageUsed}</td></tr>
+          <tr><td>Gemiddeld doorgegeven rampen</td><td>${results.averageDisastersPassed}</td></tr>
+          <tr><td>De Spiegel gebruikt</td><td>${results.mirrorUsed}</td></tr>
+          <tr><td>De Grot verwijderde een ramp</td><td>${results.caveRemoved}</td></tr>
+          <tr><td>Voedselbos kreeg 3 bonuspunten</td><td>${results.foodBonus}</td></tr>
+        </tbody>
+      </table>
+      <table class="stats-table">
+        <thead><tr><th>Tegengehouden ramp</th><th>Aantal</th></tr></thead>
+        <tbody>${neutralizedRows}</tbody>
+      </table>
+    </section>
+  `;
 }
 
 function renderScoreScreen() {
@@ -1183,7 +1407,7 @@ async function handleDebugAction(action) {
 
   if (action === "debug-give-random") {
     const player = getPlayer(state.debug.playerId);
-    const randomDefinition = CARD_DEFINITIONS[Math.floor(Math.random() * CARD_DEFINITIONS.length)];
+    const randomDefinition = chooseRandomItem(CARD_DEFINITIONS);
     await giveCardToPlayer(player, createCard(randomDefinition.key), true);
     addLog(`Debug: willekeurige kaart gegeven aan ${player.name}.`);
   }
@@ -1205,7 +1429,7 @@ async function handleDebugAction(action) {
 
   if (action === "debug-assign-island") {
     const player = getPlayer(state.debug.playerId);
-    assignIslandToPlayer(player, state.debug.islandKey);
+    assignIslandToPlayer(player, state.debug.islandKey, state);
     addLog(`Debug: eiland toegewezen aan ${player.name}.`);
   }
 
@@ -1229,9 +1453,11 @@ async function handleDebugAction(action) {
     const index = state.players.findIndex((player) => player.id === state.debug.activePlayerId);
     if (index >= 0) {
       state.currentPlayerIndex = index;
-      state.awaitingHandoff = true;
       state.currentTurn = { mainActionAvailable: true, sabotageUsed: false };
       addLog(`Debug: actieve speler is nu ${getActivePlayer().name}.`);
+      if (!getActivePlayer().isHuman) {
+        await runComputerTurns();
+      }
     }
   }
 
@@ -1241,6 +1467,12 @@ async function handleDebugAction(action) {
 
   if (action === "debug-reset-game") {
     resetGame();
+  }
+
+  if (action === "debug-run-simulation") {
+    const games = Number(state.debug.simulationGames);
+    state.simulationResults = simulateGames(games, state.players.length || state.selectedPlayerCount);
+    addLog(`Debug: ${games} potjes gesimuleerd voor balanscontrole.`);
   }
 }
 
@@ -1260,170 +1492,355 @@ async function giveCardToPlayer(player, card, executeSpecials) {
   }
 }
 
-function assignIslandToPlayer(player, islandKey) {
+function assignIslandToPlayer(player, islandKey, game) {
   const islandDefinition = ISLAND_DEFINITIONS.find((island) => island.key === islandKey);
   if (!islandDefinition) {
     return;
   }
 
   const oldIsland = player.island;
-  const otherHolder = state.players.find((candidate) => candidate.id !== player.id && candidate.island?.key === islandKey);
-  const unusedIndex = state.unusedIslands.findIndex((island) => island.key === islandKey);
-  const newIsland = createIsland(islandDefinition);
+  const otherHolder = game.players.find((candidate) => candidate.id !== player.id && candidate.island?.key === islandKey);
+  const unusedIndex = game.unusedIslands.findIndex((island) => island.key === islandKey);
 
   if (otherHolder) {
-    otherHolder.island = oldIsland ? { ...oldIsland, used: false } : createIsland(ISLAND_DEFINITIONS[0]);
-    otherHolder.islandRevealed = false;
+    otherHolder.island = oldIsland ? { ...oldIsland, used: false } : null;
   } else if (unusedIndex >= 0) {
-    state.unusedIslands.splice(unusedIndex, 1);
+    game.unusedIslands.splice(unusedIndex, 1);
     if (oldIsland) {
-      state.unusedIslands.push({ ...oldIsland, used: false });
+      game.unusedIslands.push({ ...oldIsland, used: false });
     }
   }
 
-  player.island = newIsland;
-  player.islandRevealed = false;
+  player.island = createIsland(islandDefinition);
 }
 
-function completeHandoff() {
-  state.awaitingHandoff = false;
-  getActivePlayer().islandRevealed = false;
-  renderInterface();
-}
-
-function toggleActiveIsland() {
-  const player = getActivePlayer();
-  player.islandRevealed = !player.islandRevealed;
-  renderInterface();
-}
-
-function openRules() {
-  showMessage("Spelregels", getRulesHtml(), "Sluiten");
-}
-
-function resetGame() {
-  state.gameStarted = false;
-  state.gameOver = false;
-  state.scoringStarted = false;
-  state.players = [];
-  state.deck = [];
-  state.discard = [];
-  state.unusedIslands = [];
-  state.log = [];
-  state.finalScores = [];
-  state.processing = false;
-  closeModal();
-  renderNameFields();
-  renderInterface();
-}
-
-async function runLocked(task) {
-  if (state.processing) {
+function moveCamp(player, game) {
+  if (!player.island) {
     return;
   }
-  state.processing = true;
-  renderInterface();
-  try {
-    await task();
-  } finally {
-    state.processing = false;
-    renderInterface();
+
+  const oldIsland = player.island;
+  game.unusedIslands.push({ ...oldIsland, used: false });
+  let options = shuffleDeck([...game.unusedIslands]);
+  const differentOptions = options.filter((island) => island.key !== oldIsland.key);
+  if (differentOptions.length > 0) {
+    options = differentOptions;
+  }
+
+  const newIsland = options[0];
+  game.unusedIslands = game.unusedIslands.filter((island) => island.key !== newIsland.key);
+  player.island = { ...newIsland, used: false };
+  addGameLog(game, `${player.name} verplaatste het kamp en kreeg een nieuw geheim eiland.`);
+}
+
+function simulateGames(gameCount, playerCount) {
+  const aggregate = createSimulationAggregate(gameCount, playerCount);
+
+  for (let index = 0; index < gameCount; index += 1) {
+    const simulation = createSimulationGame(playerCount);
+    let guard = 0;
+
+    while (simulation.deck.length > 0 && guard < 300) {
+      const computerPlayer = simulation.players[simulation.currentPlayerIndex];
+      executeComputerTurnInstant(simulation, computerPlayer);
+      if (simulation.deck.length === 0) {
+        break;
+      }
+      advanceGameTurn(simulation);
+      guard += 1;
+    }
+
+    processCavesInstant(simulation);
+    const scores = calculateFinalScore(simulation, simulation.metrics);
+    addSimulationScores(aggregate, scores, simulation.metrics);
+  }
+
+  return finalizeSimulationAggregate(aggregate);
+}
+
+function createSimulationGame(playerCount) {
+  const game = {
+    players: createPlayers(playerCount, "Computer 1", true),
+    deck: shuffleDeck(generateDeck()),
+    discard: [],
+    unusedIslands: [],
+    currentPlayerIndex: 0,
+    round: 1,
+    metrics: createMetrics(),
+    log: [],
+  };
+  dealIslands(game);
+  return game;
+}
+
+function executeComputerTurnInstant(game, computerPlayer) {
+  if (canComputerUseSabotageInGame(computerPlayer) && Math.random() < 0.5) {
+    computerUseSabotageInstant(game, computerPlayer);
+  }
+  if (canComputerUseWitchHillInGame(computerPlayer) && Math.random() < 0.35) {
+    computerUseWitchHillInstant(game, computerPlayer);
+  }
+
+  const stealTargets = game.players.filter((target) => target.id !== computerPlayer.id && target.hand.length > 0);
+  if (stealTargets.length > 0 && Math.random() < 0.35) {
+    stealRandomHandCardsInstant(computerPlayer, chooseRandomItem(stealTargets), 1);
+  } else {
+    drawCardInstant(game, computerPlayer);
   }
 }
 
-function showChoice(title, message, options) {
-  return new Promise((resolve) => {
-    modalRoot.classList.add("is-open");
-    modalRoot.setAttribute("aria-hidden", "false");
-    const actionButtons = options.map((option, index) => `
-      <button type="button" class="choice-button" data-choice-index="${index}" ${option.disabled ? "disabled" : ""}>
-        <strong>${escapeHtml(option.label)}</strong>
-        <span>${escapeHtml(option.description || "")}</span>
-      </button>
-    `).join("");
+function drawCardInstant(game, player) {
+  if (game.deck.length === 0) {
+    return false;
+  }
 
-    modalRoot.innerHTML = `
-      <section class="modal-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
-        <h2>${escapeHtml(title)}</h2>
-        <p>${escapeHtml(message)}</p>
-        <div class="modal-actions">${actionButtons}</div>
-      </section>
-    `;
+  const card = game.deck.shift();
+  if (card.type === "resource" || card.type === "danger") {
+    player.hand.push(card);
+  } else if (card.type === "advantage") {
+    player.advantages.push(card);
+  } else if (card.subtype === "motorboat") {
+    drawCardInstant(game, player);
+    drawCardInstant(game, player);
+    game.discard.push(card);
+  } else if (card.subtype === "raid") {
+    executePlunderInstant(game, player);
+    game.discard.push(card);
+  } else if (card.subtype === "move") {
+    moveCamp(player, game);
+    game.discard.push(card);
+  }
+  return true;
+}
 
-    modalRoot.querySelectorAll("[data-choice-index]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const option = options[Number(button.dataset.choiceIndex)];
-        closeModal();
-        resolve(option.value);
-      }, { once: true });
-    });
+function executePlunderInstant(game, player) {
+  const advantageTargets = game.players
+    .filter((target) => target.id !== player.id)
+    .flatMap((target) => target.advantages.map((card) => ({ target, card })));
+  const handTargets = game.players.filter((target) => target.id !== player.id && target.hand.length > 0);
+
+  if (advantageTargets.length === 0 && handTargets.length === 0) {
+    return;
+  }
+
+  let mode = null;
+  if (advantageTargets.length > 0 && handTargets.length > 0) {
+    mode = Math.random() < 0.5 ? "advantage" : "hand";
+  } else if (advantageTargets.length > 0) {
+    mode = "advantage";
+  } else {
+    mode = "hand";
+  }
+
+  if (mode === "advantage") {
+    const { target, card } = chooseRandomItem(advantageTargets);
+    const cardIndex = target.advantages.findIndex((candidate) => candidate.id === card.id);
+    if (cardIndex >= 0) {
+      const [stolen] = target.advantages.splice(cardIndex, 1);
+      player.advantages.push(stolen);
+    }
+  } else {
+    stealRandomHandCardsInstant(player, chooseRandomItem(handTargets), 3);
+  }
+}
+
+function computerUseSabotageInstant(game, computerPlayer) {
+  const dangerCard = chooseRandomItem(computerPlayer.hand.filter((card) => card.type === "danger"));
+  const target = chooseRandomTarget(computerPlayer, game.players);
+  const sabotageCard = removeFirstAdvantage(computerPlayer, "sabotage");
+  if (!dangerCard || !target || !sabotageCard) {
+    return;
+  }
+  game.discard.push(sabotageCard);
+  game.metrics.sabotageUsed += 1;
+  handleMirrorReactionInstant(game, computerPlayer, target, dangerCard);
+}
+
+function computerUseWitchHillInstant(game, computerPlayer) {
+  const dangerCard = chooseRandomItem(computerPlayer.hand.filter((card) => card.type === "danger"));
+  const target = chooseRandomTarget(computerPlayer, game.players);
+  if (!dangerCard || !target) {
+    return;
+  }
+  computerPlayer.island.used = true;
+  handleMirrorReactionInstant(game, computerPlayer, target, dangerCard);
+}
+
+function handleMirrorReactionInstant(game, attacker, target, dangerCard) {
+  game.metrics.disastersPassed += 1;
+  if (target.island?.effectType === "mirror" && !target.island.used && Math.random() < 0.6) {
+    const ownDangers = target.hand.filter((card) => card.type === "danger");
+    if (ownDangers.length > 0 && Math.random() < 0.5) {
+      const returned = removeCardFromHand(target, chooseRandomItem(ownDangers).id);
+      if (returned) {
+        attacker.hand.push(returned);
+      }
+    }
+    target.island.used = true;
+    game.metrics.mirrorUsed += 1;
+    return;
+  }
+
+  const transferred = removeCardFromHand(attacker, dangerCard.id);
+  if (transferred) {
+    target.hand.push(transferred);
+  }
+}
+
+function stealRandomHandCardsInstant(thief, target, amount) {
+  const stealAmount = Math.min(amount, target.hand.length);
+  for (let index = 0; index < stealAmount; index += 1) {
+    const randomIndex = Math.floor(Math.random() * target.hand.length);
+    const [card] = target.hand.splice(randomIndex, 1);
+    thief.hand.push(card);
+  }
+}
+
+function processCavesInstant(game) {
+  game.players.forEach((player) => {
+    player.removedByCave = [];
+    if (player.island?.effectType !== "cave") {
+      return;
+    }
+    const dangers = player.hand.filter((card) => card.type === "danger");
+    if (dangers.length > 0) {
+      removeDangerWithCave(player, chooseRandomItem(dangers).id, game);
+    }
   });
 }
 
-function showMessage(title, html, closeLabel) {
-  modalRoot.classList.add("is-open");
-  modalRoot.setAttribute("aria-hidden", "false");
-  modalRoot.innerHTML = `
-    <section class="modal-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
-      <h2>${escapeHtml(title)}</h2>
-      <div class="rules-content">${html}</div>
-      <div class="modal-actions">
-        <button type="button" class="primary-button" data-close-modal>${escapeHtml(closeLabel)}</button>
-      </div>
-    </section>
-  `;
-  modalRoot.querySelector("[data-close-modal]").addEventListener("click", closeModal, { once: true });
-}
-
-function closeModal() {
-  modalRoot.classList.remove("is-open");
-  modalRoot.setAttribute("aria-hidden", "true");
-  modalRoot.innerHTML = "";
-}
-
-function choosePlayer(title, players, message) {
-  return showChoice(title, message, players.map((player) => ({
-    label: player.name,
-    description: `${player.hand.length} handkaart(en), ${player.advantages.length} voordeelkaart(en).`,
-    value: player.id,
-  })));
-}
-
-async function chooseOwnDanger(player, title, message) {
-  const dangers = player.hand.filter((card) => card.type === "danger");
-  if (dangers.length === 0) {
-    addLog(`${player.name} heeft geen rampkaart om te kiezen.`);
-    return null;
-  }
-  const choice = await showChoice(title, message, [
-    ...dangers.map((card) => ({
-      label: card.name,
-      description: card.description,
-      value: card.id,
+function createSimulationAggregate(games, playerCount) {
+  return {
+    games,
+    playerCount,
+    islandStats: Object.fromEntries(ISLAND_DEFINITIONS.map((island) => [island.key, {
+      key: island.key,
+      name: island.name,
+      appearances: 0,
+      wins: 0,
+      totalScore: 0,
+    }])),
+    scoreByPlayer: Array.from({ length: playerCount }, (_, index) => ({
+      name: `Spelerpositie ${index + 1}`,
+      totalScore: 0,
+      count: 0,
     })),
-    {
-      label: "Annuleren",
-      description: "Gebruik deze extra actie nu niet.",
-      value: null,
-    },
-  ]);
-  return choice ? player.hand.find((card) => card.id === choice) : null;
+    highestScore: Number.NEGATIVE_INFINITY,
+    lowestScore: Number.POSITIVE_INFINITY,
+    sabotageUsed: 0,
+    disastersPassed: 0,
+    neutralized: { bear: 0, fire: 0, drought: 0, leak: 0 },
+    mirrorUsed: 0,
+    caveRemoved: 0,
+    foodBonus: 0,
+  };
 }
 
-function canUseSabotage(player) {
-  return !state.awaitingHandoff
+function addSimulationScores(aggregate, scores, metrics) {
+  const highest = Math.max(...scores.map((score) => score.total));
+  scores.forEach((score, index) => {
+    const island = aggregate.islandStats[score.islandKey];
+    island.appearances += 1;
+    island.totalScore += score.total;
+    if (score.total === highest) {
+      island.wins += 1;
+    }
+
+    aggregate.scoreByPlayer[index].totalScore += score.total;
+    aggregate.scoreByPlayer[index].count += 1;
+    aggregate.highestScore = Math.max(aggregate.highestScore, score.total);
+    aggregate.lowestScore = Math.min(aggregate.lowestScore, score.total);
+  });
+
+  aggregate.sabotageUsed += metrics.sabotageUsed;
+  aggregate.disastersPassed += metrics.disastersPassed;
+  aggregate.mirrorUsed += metrics.mirrorUsed;
+  aggregate.caveRemoved += metrics.caveRemoved;
+  aggregate.foodBonus += metrics.foodBonus;
+  Object.keys(aggregate.neutralized).forEach((key) => {
+    aggregate.neutralized[key] += metrics.neutralized[key] || 0;
+  });
+}
+
+function finalizeSimulationAggregate(aggregate) {
+  return {
+    games: aggregate.games,
+    playerCount: aggregate.playerCount,
+    islandStats: Object.values(aggregate.islandStats).map((island) => ({
+      name: island.name,
+      wins: island.wins,
+      winRate: island.appearances ? formatNumber((island.wins / island.appearances) * 100) : "0.0",
+      averageScore: island.appearances ? formatNumber(island.totalScore / island.appearances) : "0.0",
+    })),
+    highestScore: aggregate.highestScore,
+    lowestScore: aggregate.lowestScore,
+    averageScoreByPlayer: aggregate.scoreByPlayer.map((player) => ({
+      name: player.name,
+      averageScore: player.count ? formatNumber(player.totalScore / player.count) : "0.0",
+    })),
+    averageSabotageUsed: formatNumber(aggregate.sabotageUsed / aggregate.games),
+    averageDisastersPassed: formatNumber(aggregate.disastersPassed / aggregate.games),
+    neutralized: aggregate.neutralized,
+    mirrorUsed: aggregate.mirrorUsed,
+    caveRemoved: aggregate.caveRemoved,
+    foodBonus: aggregate.foodBonus,
+  };
+}
+
+function advanceGameTurn(game) {
+  const previousIndex = game.currentPlayerIndex;
+  game.currentPlayerIndex = (game.currentPlayerIndex + 1) % game.players.length;
+  if (game.currentPlayerIndex <= previousIndex) {
+    game.round += 1;
+  }
+}
+
+function canHumanUseSabotage(player) {
+  return player?.isHuman
+    && !state.processing
     && state.currentTurn.mainActionAvailable
     && !state.currentTurn.sabotageUsed
     && player.advantages.some((card) => card.subtype === "sabotage")
     && player.hand.some((card) => card.type === "danger");
 }
 
-function canUseWitchHill(player) {
-  return !state.awaitingHandoff
+function canHumanUseWitchHill(player) {
+  return player?.isHuman
+    && !state.processing
     && state.currentTurn.mainActionAvailable
     && player.island?.effectType === "witch"
     && !player.island.used
     && player.hand.some((card) => card.type === "danger");
+}
+
+function canComputerUseSabotage(computerPlayer) {
+  return canComputerUseSabotageInGame(computerPlayer) && !state.currentTurn.sabotageUsed;
+}
+
+function canComputerUseSabotageInGame(computerPlayer) {
+  return computerPlayer.advantages.some((card) => card.subtype === "sabotage")
+    && computerPlayer.hand.some((card) => card.type === "danger");
+}
+
+function canComputerUseWitchHill(computerPlayer) {
+  return canComputerUseWitchHillInGame(computerPlayer);
+}
+
+function canComputerUseWitchHillInGame(computerPlayer) {
+  return computerPlayer.island?.effectType === "witch"
+    && !computerPlayer.island.used
+    && computerPlayer.hand.some((card) => card.type === "danger");
+}
+
+function chooseRandomTarget(player, players) {
+  return chooseRandomItem(players.filter((target) => target.id !== player.id));
+}
+
+function chooseRandomItem(items) {
+  if (!items.length) {
+    return null;
+  }
+  return items[Math.floor(Math.random() * items.length)];
 }
 
 function countResources(cards) {
@@ -1448,6 +1865,15 @@ function removeCardFromHand(player, cardId) {
     return null;
   }
   const [card] = player.hand.splice(index, 1);
+  return card;
+}
+
+function removeFirstAdvantage(player, subtype) {
+  const index = player.advantages.findIndex((card) => card.subtype === subtype);
+  if (index < 0) {
+    return null;
+  }
+  const [card] = player.advantages.splice(index, 1);
   return card;
 }
 
@@ -1497,11 +1923,165 @@ function createIsland(definition) {
   };
 }
 
+function createMetrics() {
+  return {
+    sabotageUsed: 0,
+    disastersPassed: 0,
+    neutralized: { bear: 0, fire: 0, drought: 0, leak: 0 },
+    mirrorUsed: 0,
+    caveRemoved: 0,
+    foodBonus: 0,
+  };
+}
+
 function addLog(message) {
-  state.log.push(message);
-  if (state.log.length > 80) {
-    state.log.shift();
+  addGameLog(state, message);
+}
+
+function addGameLog(game, message) {
+  if (!game.log) {
+    return;
   }
+  game.log.push(message);
+  if (game.log.length > 100) {
+    game.log.shift();
+  }
+}
+
+function getIslandPowerStatus(player) {
+  if (!isOneTimeIsland(player.island)) {
+    return "Niet eenmalig";
+  }
+  return player.island.used ? "Gebruikt" : "Ongebruikt";
+}
+
+function isOneTimeIsland(island) {
+  return ["cave", "witch", "mirror"].includes(island?.effectType);
+}
+
+async function chooseOwnDanger(player, title, message) {
+  const dangers = player.hand.filter((card) => card.type === "danger");
+  if (dangers.length === 0) {
+    addLog(`${player.name} heeft geen rampkaart om te kiezen.`);
+    return null;
+  }
+  const choice = await showChoice(title, message, [
+    ...dangers.map((card) => ({
+      label: card.name,
+      description: card.description,
+      value: card.id,
+    })),
+    {
+      label: "Annuleren",
+      description: "Gebruik deze extra actie nu niet.",
+      value: null,
+    },
+  ]);
+  return choice ? player.hand.find((card) => card.id === choice) : null;
+}
+
+function choosePlayer(title, players, message) {
+  return showChoice(title, message, players.map((player) => ({
+    label: player.name,
+    description: `${player.hand.length} handkaart(en), ${player.advantages.length} voordeelkaart(en).`,
+    value: player.id,
+  })));
+}
+
+function showChoice(title, message, options) {
+  return new Promise((resolve) => {
+    modalRoot.classList.add("is-open");
+    modalRoot.setAttribute("aria-hidden", "false");
+    modalRoot.innerHTML = `
+      <section class="modal-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+        <h2>${escapeHtml(title)}</h2>
+        <p>${escapeHtml(message)}</p>
+        <div class="modal-actions">
+          ${options.map((option, index) => `
+            <button type="button" class="choice-button" data-choice-index="${index}" ${option.disabled ? "disabled" : ""}>
+              <strong>${escapeHtml(option.label)}</strong>
+              <span>${escapeHtml(option.description || "")}</span>
+            </button>
+          `).join("")}
+        </div>
+      </section>
+    `;
+
+    modalRoot.querySelectorAll("[data-choice-index]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const option = options[Number(button.dataset.choiceIndex)];
+        closeModal();
+        resolve(option.value);
+      }, { once: true });
+    });
+  });
+}
+
+function showMessage(title, html, closeLabel) {
+  modalRoot.classList.add("is-open");
+  modalRoot.setAttribute("aria-hidden", "false");
+  modalRoot.innerHTML = `
+    <section class="modal-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+      <h2>${escapeHtml(title)}</h2>
+      <div class="rules-content">${html}</div>
+      <div class="modal-actions">
+        <button type="button" class="primary-button" data-close-modal>${escapeHtml(closeLabel)}</button>
+      </div>
+    </section>
+  `;
+  modalRoot.querySelector("[data-close-modal]").addEventListener("click", closeModal, { once: true });
+}
+
+function closeModal() {
+  modalRoot.classList.remove("is-open");
+  modalRoot.setAttribute("aria-hidden", "true");
+  modalRoot.innerHTML = "";
+}
+
+async function runLocked(task) {
+  if (state.processing) {
+    return;
+  }
+  state.processing = true;
+  renderInterface();
+  try {
+    await task();
+  } finally {
+    state.processing = false;
+    renderInterface();
+  }
+}
+
+function resetGame() {
+  state.gameStarted = false;
+  state.gameOver = false;
+  state.scoringStarted = false;
+  state.processing = false;
+  state.computerRunning = false;
+  state.players = [];
+  state.deck = [];
+  state.discard = [];
+  state.unusedIslands = [];
+  state.log = [];
+  state.finalScores = [];
+  state.simulationResults = null;
+  closeModal();
+  renderNameFields();
+  renderInterface();
+}
+
+function openRules() {
+  showMessage("Spelregels", getRulesHtml(), "Sluiten");
+}
+
+function computerPause() {
+  const delay = COMPUTER_SPEED_DELAYS[state.computerSpeed] || 0;
+  if (delay === 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, delay);
+  });
 }
 
 function syncDebugDefaults() {
@@ -1509,12 +2089,8 @@ function syncDebugDefaults() {
     return;
   }
   const active = getActivePlayer();
-  const first = state.players[0];
   if (!getPlayer(state.debug.playerId)) {
     state.debug.playerId = active.id;
-  }
-  if (!getPlayer(state.debug.randomTargetId)) {
-    state.debug.randomTargetId = active.id;
   }
   if (!getPlayer(state.debug.handPlayerId)) {
     state.debug.handPlayerId = active.id;
@@ -1522,7 +2098,7 @@ function syncDebugDefaults() {
   if (!getPlayer(state.debug.activePlayerId)) {
     state.debug.activePlayerId = active.id;
   }
-  const handPlayer = getPlayer(state.debug.handPlayerId) || first;
+  const handPlayer = getPlayer(state.debug.handPlayerId) || active;
   if (!handPlayer.hand.some((card) => card.id === Number(state.debug.handCardId))) {
     state.debug.handCardId = handPlayer.hand[0]?.id ? String(handPlayer.hand[0].id) : "";
   }
@@ -1539,6 +2115,10 @@ function formatList(items) {
   return items.length ? items.join(", ") : "Geen";
 }
 
+function formatCardNames(cards) {
+  return cards.map((card) => card.name).join(", ");
+}
+
 function formatNeutralized(items) {
   if (!items.length) {
     return "Geen";
@@ -1553,20 +2133,27 @@ function formatExecuted(items) {
   return items.map((item) => `${item.danger.name} (${item.effect})`).join(", ");
 }
 
+function formatNumber(value) {
+  return Number(value).toFixed(1);
+}
+
 function getRulesHtml() {
   return `
     <section>
-      <h3>Doel</h3>
-      <p>Verzamel Hout, Vis en Water. Iedere grondstof is 1 punt waard, behalve als jouw geheime eiland dit verandert.</p>
+      <h3>Singleplayer</h3>
+      <p>Jij bestuurt Speler 1. Alle andere spelers zijn computerspelers met vaste JavaScript-regels en willekeurige keuzes.</p>
     </section>
     <section>
       <h3>Beurt</h3>
       <ol>
-        <li>Geef het scherm aan de actieve speler en druk op Ik ben klaar.</li>
-        <li>Gebruik eventueel maximaal één Sabotage en eventueel De Heksenheuvel als je die hebt.</li>
-        <li>Kies precies één hoofdactie: kaart trekken of willekeurig één handkaart stelen.</li>
-        <li>Na de hoofdactie gaat de beurt naar de volgende speler. Speciale kaarten worden eerst volledig afgehandeld.</li>
+        <li>Tijdens jouw beurt kies je eventueel Sabotage of De Heksenheuvel als extra actie.</li>
+        <li>Daarna kies je één hoofdactie: trek een kaart of steel een willekeurige handkaart.</li>
+        <li>Na jouw hoofdactie voeren alle computerspelers hun beurten automatisch uit totdat jij weer aan de beurt bent.</li>
       </ol>
+    </section>
+    <section>
+      <h3>Computerregels</h3>
+      <p>Een computerspeler trekt met 65% kans een kaart en steelt met 35% kans een willekeurige handkaart van een geldige tegenstander. Sabotage wordt met 50% kans gebruikt als dat kan. De Heksenheuvel wordt met 35% kans gebruikt als dat kan. De Spiegel wordt met 60% kans gebruikt wanneer een ramp wordt aangeboden.</p>
     </section>
     <section>
       <h3>Kaarten</h3>
@@ -1578,16 +2165,8 @@ function getRulesHtml() {
       </ul>
     </section>
     <section>
-      <h3>Rampen en bescherming</h3>
-      <p>Bijl blokkeert één Bosbrand, Hengel blokkeert één Beer en Regenbui blokkeert één Droogte. Beer kost 2 Vis, Bosbrand 2 Hout, Droogte 2 Water. Kano lek heeft nu geen effect.</p>
-    </section>
-    <section>
-      <h3>Eilanden</h3>
-      <p>Visvijver verdubbelt Vis, Het Bos verdubbelt Hout, Het Riviertje verdubbelt Water, De Grot verwijdert bij het eindspel één ramp, De Heksenheuvel geeft één keer een ramp weg, Het Voedselbos geeft 3 punten voor minstens 1 van iedere grondstof, en De Spiegel kan één ramp terugkaatsen.</p>
-    </section>
-    <section>
-      <h3>Einde</h3>
-      <p>Het spel eindigt automatisch nadat de trekstapel leeg is en alle effecten klaar zijn. De testknop Spel nu beëindigen start dezelfde eindscore direct.</p>
+      <h3>Einde en score</h3>
+      <p>Het spel eindigt wanneer de trekstapel leeg is. De Grot verwijdert eerst eventueel een ramp. Daarna blokkeren Bijl, Hengel en Regenbui passende rampen. Beer kost 2 Vis, Bosbrand 2 Hout, Droogte 2 Water en Kano lek heeft voorlopig geen effect.</p>
     </section>
   `;
 }

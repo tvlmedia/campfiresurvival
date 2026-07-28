@@ -122,6 +122,8 @@ Daarnaast is er een simulatiemodus voor balanscontrole:
 
 Tijdens simulaties worden alle spelers automatisch bestuurd met dezelfde eenvoudige regels. De resultaten tonen onder andere winpercentages per eiland, gemiddelde scores, hoogste en laagste score, gebruikte Sabotagekaarten, doorgegeven rampen, tegengehouden rampen en hoe vaak De Spiegel, De Grot en Het Voedselbos effect hadden.
 
+Na iedere simulatie maakt het prototype ook automatisch een conclusierapport in tekstvorm. Dat rapport staat onder de simulatietabellen en is bedoeld om direct door te sturen naar ChatGPT voor balansfeedback.
+
 ## Bekende TODO's
 
 - Het definitieve effect van Kano lek moet nog worden bepaald.

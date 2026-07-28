@@ -521,6 +521,20 @@ h3 {
   margin-top: 12px;
 }
 
+.report-box {
+  width: 100%;
+  min-height: 360px;
+  padding: 12px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid #cfd8d1;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  resize: vertical;
+}
+
 .deck-view {
   max-height: 260px;
   overflow: auto;

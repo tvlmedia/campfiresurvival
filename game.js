@@ -1266,12 +1266,16 @@ function renderDebugPanel() {
 
       <section class="debug-group">
         <h3>Simulatiemodus</h3>
+        <p class="muted-text">Laat het spel volledig automatisch spelen met dezelfde vaste computerregels.</p>
         <select id="debug-simulation-games">
           <option value="10">10 potjes simuleren</option>
           <option value="100">100 potjes simuleren</option>
           <option value="1000">1.000 potjes simuleren</option>
         </select>
-        <button type="button" class="primary-button" data-action="debug-run-simulation">Simulatie draaien</button>
+        <div class="debug-actions">
+          <button type="button" class="primary-button" data-action="debug-run-100-simulation">100 potjes automatisch spelen</button>
+          <button type="button" class="secondary-button" data-action="debug-run-simulation">Gekozen aantal draaien</button>
+        </div>
       </section>
     </div>
     ${renderSimulationResults()}
@@ -1294,6 +1298,7 @@ function renderSimulationResults() {
   if (!results) {
     return "";
   }
+  const report = buildSimulationReport(results);
 
   const islandRows = results.islandStats.map((row) => `
     <tr>
@@ -1343,6 +1348,10 @@ function renderSimulationResults() {
         <thead><tr><th>Tegengehouden ramp</th><th>Aantal</th></tr></thead>
         <tbody>${neutralizedRows}</tbody>
       </table>
+      <div>
+        <h3>Conclusierapport voor ChatGPT</h3>
+        <textarea class="report-box" readonly>${escapeHtml(report)}</textarea>
+      </div>
     </section>
   `;
 }
@@ -1473,6 +1482,12 @@ async function handleDebugAction(action) {
     const games = Number(state.debug.simulationGames);
     state.simulationResults = simulateGames(games, state.players.length || state.selectedPlayerCount);
     addLog(`Debug: ${games} potjes gesimuleerd voor balanscontrole.`);
+  }
+
+  if (action === "debug-run-100-simulation") {
+    state.debug.simulationGames = "100";
+    state.simulationResults = simulateGames(100, state.players.length || state.selectedPlayerCount);
+    addLog("Debug: 100 potjes volledig automatisch gespeeld.");
   }
 }
 
@@ -1787,6 +1802,78 @@ function finalizeSimulationAggregate(aggregate) {
   };
 }
 
+function buildSimulationReport(results) {
+  const islandsByWinRate = [...results.islandStats].sort((left, right) => Number(right.winRate) - Number(left.winRate));
+  const islandsByScore = [...results.islandStats].sort((left, right) => Number(right.averageScore) - Number(left.averageScore));
+  const bestWinRate = islandsByWinRate[0];
+  const lowestWinRate = islandsByWinRate[islandsByWinRate.length - 1];
+  const bestScore = islandsByScore[0];
+  const lowestScore = islandsByScore[islandsByScore.length - 1];
+  const winRateSpread = formatNumber(Number(bestWinRate.winRate) - Number(lowestWinRate.winRate));
+  const scoreSpread = formatNumber(Number(bestScore.averageScore) - Number(lowestScore.averageScore));
+  const playerScores = results.averageScoreByPlayer.map((row) => Number(row.averageScore));
+  const playerScoreSpread = formatNumber(Math.max(...playerScores) - Math.min(...playerScores));
+  const neutralizedLines = Object.entries(results.neutralized)
+    .map(([key, value]) => `- ${getCardDefinitionBySubtype(key)?.name || key}: ${value}`)
+    .join("\n");
+  const islandLines = results.islandStats
+    .map((row) => `- ${row.name}: ${row.wins} wins, ${row.winRate}% winrate, gemiddelde score ${row.averageScore}`)
+    .join("\n");
+  const playerLines = results.averageScoreByPlayer
+    .map((row) => `- ${row.name}: gemiddelde score ${row.averageScore}`)
+    .join("\n");
+
+  return `# Conclusierapport Campfire Survival
+
+## Simulatie-opzet
+- Aantal gesimuleerde potjes: ${results.games}
+- Aantal spelers per potje: ${results.playerCount}
+- Alle spelers werden volledig automatisch bestuurd met vaste JavaScript-regels en willekeurige keuzes.
+- Deze simulatie is bedoeld als snelle balanscheck, niet als definitief statistisch bewijs.
+
+## Resultaten per eiland
+${islandLines}
+
+## Scoreverdeling
+- Hoogste score in de simulatie: ${results.highestScore}
+- Laagste score in de simulatie: ${results.lowestScore}
+- Beste gemiddelde score: ${bestScore.name} met ${bestScore.averageScore}
+- Laagste gemiddelde score: ${lowestScore.name} met ${lowestScore.averageScore}
+- Verschil tussen hoogste en laagste gemiddelde eilandscore: ${scoreSpread}
+- Hoogste winpercentage: ${bestWinRate.name} met ${bestWinRate.winRate}%
+- Laagste winpercentage: ${lowestWinRate.name} met ${lowestWinRate.winRate}%
+- Verschil tussen hoogste en laagste winpercentage: ${winRateSpread} procentpunt
+
+## Gemiddelde score per spelerpositie
+${playerLines}
+- Verschil tussen beste en slechtste spelerpositie: ${playerScoreSpread}
+
+## Interactiekaarten en rampen
+- Gemiddeld gebruikte Sabotagekaarten per potje: ${results.averageSabotageUsed}
+- Gemiddeld doorgegeven rampen per potje: ${results.averageDisastersPassed}
+- De Spiegel werd gebruikt: ${results.mirrorUsed} keer
+- De Grot verwijderde een ramp: ${results.caveRemoved} keer
+- Het Voedselbos kreeg 3 bonuspunten: ${results.foodBonus} keer
+
+## Tegen gehouden rampen
+${neutralizedLines}
+
+## Eerste conclusies
+- Als een eiland duidelijk hoger scoort of wint dan de rest, is dat eiland mogelijk te sterk of te makkelijk te benutten.
+- Als een eiland structureel lager scoort, is de kracht mogelijk te situationeel of te zwak.
+- Een groot verschil tussen spelerposities kan wijzen op beurtvolgordevoordeel.
+- Veel gebruikte Sabotage en doorgegeven rampen betekenen dat interactie waarschijnlijk vaak voorkomt.
+- Als De Spiegel of De Grot weinig effect heeft, kan de timing of trigger te zeldzaam zijn.
+
+## Vragen aan ChatGPT
+1. Beoordeel op basis van deze cijfers welke eilandkaarten waarschijnlijk te sterk of te zwak zijn.
+2. Geef concrete balansvoorstellen voor de zwakste en sterkste eilanden.
+3. Controleer of de hoeveelheid negatieve interactie via Sabotage, De Heksenheuvel en De Spiegel leuk lijkt of mogelijk frustrerend wordt.
+4. Stel eventueel een definitief effect voor Kano lek voor dat past bij deze balans.
+5. Geef suggesties voor extra testmetingen die in een volgende simulatie nuttig zijn.
+`;
+}
+
 function advanceGameTurn(game) {
   const previousIndex = game.currentPlayerIndex;
   game.currentPlayerIndex = (game.currentPlayerIndex + 1) % game.players.length;
@@ -1797,7 +1884,6 @@ function advanceGameTurn(game) {
 
 function canHumanUseSabotage(player) {
   return player?.isHuman
-    && !state.processing
     && state.currentTurn.mainActionAvailable
     && !state.currentTurn.sabotageUsed
     && player.advantages.some((card) => card.subtype === "sabotage")
@@ -1806,7 +1892,6 @@ function canHumanUseSabotage(player) {
 
 function canHumanUseWitchHill(player) {
   return player?.isHuman
-    && !state.processing
     && state.currentTurn.mainActionAvailable
     && player.island?.effectType === "witch"
     && !player.island.used

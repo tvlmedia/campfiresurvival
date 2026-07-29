@@ -36,7 +36,7 @@ Tijdens jouw beurt kies je precies één hoofdactie:
 Extra acties vervangen de hoofdactie niet:
 
 - `Sabotage`: leg één open Sabotage af om een ramp uit je eigen hand aan een andere speler te geven. Maximaal één keer per beurt.
-- `De Heksenheuvel`: als je dit eiland hebt, mag je één keer in het spel een ramp uit je hand aan een andere speler geven.
+- `De Heksenheuvel`: als je dit eiland hebt, mag je één keer in het spel maximaal twee rampen uit je hand weggeven.
 
 Na jouw hoofdactie spelen alle computerspelers automatisch door totdat jij weer aan de beurt bent. De snelheid is instelbaar:
 
@@ -55,7 +55,8 @@ Computerspelers gebruiken alleen vaste regels en `Math.random()`:
 - Als niemand bestolen kan worden, trekt de computer altijd.
 - Heeft de computer Sabotage en een rampkaart, dan gebruikt hij Sabotage met 50% kans.
 - Heeft de computer De Heksenheuvel ongebruikt en een rampkaart, dan gebruikt hij die kracht met 35% kans.
-- Een computer met De Spiegel gebruikt die met 60% kans wanneer hij een ramp aangeboden krijgt.
+- Heeft de computer met De Heksenheuvel twee of meer rampkaarten, dan is er 50% kans dat hij twee rampen weggeeft in plaats van één.
+- Een computer met De Spiegel gebruikt die alleen wanneer hij minimaal één eigen rampkaart heeft.
 - Plundertocht kiest willekeurig tussen beschikbare opties.
 
 ## Kaartverdeling
@@ -93,16 +94,16 @@ De gewone trekstapel bevat 47 kaarten. De 7 eilanden zitten apart.
 - De Visvijver: overgebleven Vis telt dubbel.
 - Het Bos: overgebleven Hout telt dubbel.
 - Het Riviertje: overgebleven Water telt dubbel.
-- De Grot: bij het eindspel mag je één ramp wegleggen voordat rampen worden verwerkt.
-- De Heksenheuvel: één keer tijdens je eigen beurt mag je een ramp aan een andere speler geven.
+- De Grot: bij het eindspel verwijder je één willekeurige ramp of twee identieke rampen voordat rampen worden verwerkt.
+- De Heksenheuvel: één keer tijdens je eigen beurt mag je maximaal twee rampkaarten aan dezelfde speler of verschillende spelers geven.
 - Het Voedselbos: na rampen minimaal 1 Hout, 1 Vis en 1 Water over geeft 3 bonuspunten.
-- De Spiegel: één keer mag je een aangeboden ramp weigeren en een ramp teruggeven.
+- De Spiegel: één keer mag je een aangeboden ramp weigeren, die ramp afleggen en een eigen ramp teruggeven. Dit kan alleen als je al een eigen rampkaart hebt.
 
 ## Eindscore
 
 Het eindspel verloopt stap voor stap:
 
-1. De Grot mag eventueel één ramp verwijderen.
+1. De Grot verwijdert één willekeurige ramp of twee identieke rampen.
 2. Voordeelkaarten blokkeren passende rampen.
 3. Niet geblokkeerde rampen worden uitgevoerd. Grondstoffen gaan nooit onder 0.
 4. Eilandscores en bonuspunten worden toegepast.
@@ -120,9 +121,9 @@ Daarnaast is er een simulatiemodus voor balanscontrole:
 - 100 potjes simuleren
 - 1.000 potjes simuleren
 
-Tijdens simulaties worden alle spelers automatisch bestuurd met dezelfde eenvoudige regels. De resultaten tonen onder andere winpercentages per eiland, gemiddelde scores, hoogste en laagste score, gebruikte Sabotagekaarten, doorgegeven rampen, tegengehouden rampen en hoe vaak De Spiegel, De Grot en Het Voedselbos effect hadden.
+Tijdens simulaties worden alle spelers automatisch bestuurd met dezelfde eenvoudige regels. De resultaten tonen onder andere winpercentages per eiland, wins en winpercentages per spelerpositie, winnende start- en eind-eilandcombinaties, gemiddelde scores, hoogste en laagste score, gebruikte Sabotagekaarten, doorgegeven rampen, tegengehouden rampen, Heksenheuvel-gebruik met één of twee rampen, Spiegel-kansen, Grot-keuzes en hoe vaak Het Voedselbos effect had. De start- en eindcombinaties worden apart bijgehouden omdat `Kamp verplaatsen` eilandkaarten kan veranderen tijdens een potje.
 
-Na iedere simulatie maakt het prototype ook automatisch een conclusierapport in tekstvorm. Dat rapport staat onder de simulatietabellen en is bedoeld om direct door te sturen naar ChatGPT voor balansfeedback.
+Na iedere simulatie maakt het prototype ook automatisch een conclusierapport in tekstvorm. Dat rapport staat onder de simulatietabellen en is bedoeld om direct door te sturen naar ChatGPT voor balansfeedback. Voor eilandcombinaties is 100 potjes vooral een snelle indicatie; 1.000 potjes geeft betrouwbaardere patronen.
 
 ## Bekende TODO's
 

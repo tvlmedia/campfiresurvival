@@ -161,14 +161,14 @@ const ISLAND_DEFINITIONS = [
     key: "cave",
     name: "De Grot",
     icon: "🕳️",
-    description: "Aan het einde mag je één ramp uit je hand wegleggen voordat rampen werken.",
+    description: "Aan het einde verwijder je één willekeurige ramp of twee identieke rampen uit je hand.",
     effectType: "cave",
   },
   {
     key: "witch",
     name: "De Heksenheuvel",
     icon: "🌙",
-    description: "Eén keer tijdens je eigen beurt mag je één ramp aan een andere speler geven.",
+    description: "Eén keer tijdens je eigen beurt mag je maximaal twee rampen aan andere spelers geven.",
     effectType: "witch",
   },
   {
@@ -182,7 +182,7 @@ const ISLAND_DEFINITIONS = [
     key: "mirror",
     name: "De Spiegel",
     icon: "🪞",
-    description: "Eén keer kun je een ramp die iemand jou geeft weigeren en een ramp teruggeven.",
+    description: "Eén keer kun je een aangeboden ramp afleggen en een eigen ramp teruggeven.",
     effectType: "mirror",
   },
 ];
@@ -413,6 +413,8 @@ function createPlayers(playerCount, humanName, allComputers) {
       hand: [],
       advantages: [],
       island: null,
+      startingIslandKey: null,
+      startingIslandName: null,
       removedByCave: [],
     };
   });
@@ -440,6 +442,8 @@ function dealIslands(game) {
   const islandPool = shuffleDeck(ISLAND_DEFINITIONS.map(createIsland));
   game.players.forEach((player) => {
     player.island = islandPool.shift();
+    player.startingIslandKey = player.island.key;
+    player.startingIslandName = player.island.name;
   });
   game.unusedIslands = islandPool;
 }
@@ -743,38 +747,52 @@ async function useHumanWitchHill() {
     return;
   }
 
-  const dangerCard = await chooseOwnDanger(player, "De Heksenheuvel", "Kies een rampkaart uit je eigen hand.");
-  if (!dangerCard) {
+  const transfers = await chooseHumanWitchHillTransfers(player);
+  if (transfers.length === 0) {
     return;
   }
-  const targetId = await choosePlayer("De Heksenheuvel", getOtherPlayers(player), "Kies de computerspeler die de ramp krijgt.");
+
   player.island.used = true;
-  await handleMirrorReaction(player, getPlayer(targetId), dangerCard, "De Heksenheuvel");
-  addLog(`${player.name} gebruikte De Heksenheuvel.`);
+  recordWitchHillUse(player, transfers.length);
+  addLog(`${player.name} gebruikte De Heksenheuvel en gaf ${transfers.length} rampkaart(en) door.`);
+
+  for (const transfer of transfers) {
+    await handleMirrorReaction(player, transfer.target, transfer.card, "De Heksenheuvel");
+  }
 }
 
 async function computerUseWitchHill(computerPlayer) {
-  const dangerCard = chooseRandomItem(computerPlayer.hand.filter((card) => card.type === "danger"));
-  const target = chooseRandomTarget(computerPlayer, state.players);
-  if (!dangerCard || !target) {
+  const transfers = chooseComputerWitchHillTransfers(computerPlayer, state.players);
+  if (transfers.length === 0) {
     return;
   }
 
   computerPlayer.island.used = true;
-  addLog(`${computerPlayer.name} gebruikte De Heksenheuvel.`);
-  await handleMirrorReaction(computerPlayer, target, dangerCard, "De Heksenheuvel");
+  recordWitchHillUse(computerPlayer, transfers.length);
+  addLog(`${computerPlayer.name} gebruikte De Heksenheuvel en gaf ${transfers.length} rampkaart(en) door.`);
+
+  for (const transfer of transfers) {
+    await handleMirrorReaction(computerPlayer, transfer.target, transfer.card, "De Heksenheuvel");
+  }
 }
 
 async function handleMirrorReaction(attacker, target, dangerCard, sourceName) {
   state.metrics.disastersPassed += 1;
 
   if (target.island?.effectType === "mirror" && !target.island.used) {
+    const ownDangers = target.hand.filter((card) => card.type === "danger");
+    if (ownDangers.length === 0) {
+      state.metrics.mirrorUnavailableNoDanger += 1;
+    } else {
+      state.metrics.mirrorAvailable += 1;
+    }
+
     const usesMirror = target.isHuman
-      ? await askHumanMirrorChoice(attacker, target, dangerCard, sourceName)
-      : Math.random() < 0.6;
+      ? ownDangers.length > 0 && await askHumanMirrorChoice(attacker, target, dangerCard, sourceName)
+      : ownDangers.length > 0;
 
     if (usesMirror) {
-      await resolveMirrorReturn(attacker, target, dangerCard);
+      await resolveMirrorReturn(attacker, target, dangerCard, ownDangers);
       target.island.used = true;
       state.metrics.mirrorUsed += 1;
       return { accepted: false, mirrored: true };
@@ -800,42 +818,139 @@ async function askHumanMirrorChoice(attacker, target, dangerCard, sourceName) {
     },
     {
       label: "Ja, De Spiegel gebruiken",
-      description: "Weiger de ramp en geef een ramp terug.",
+      description: "Leg de aangeboden ramp af en geef een eigen ramp terug.",
       value: "mirror",
     },
   ]);
   return choice === "mirror";
 }
 
-async function resolveMirrorReturn(attacker, target, dangerCard) {
-  const ownDangers = target.hand.filter((card) => card.type === "danger");
-  let returnChoice = { mode: "same" };
-
-  if (target.isHuman) {
-    returnChoice = await showChoice("De Spiegel", "Kies welke ramp teruggaat naar de aanvaller.", [
-      {
-        label: `De aangeboden ${dangerCard.name} teruggeven`,
-        description: `${dangerCard.name} blijft bij ${attacker.name}.`,
-        value: { mode: "same" },
-      },
-      ...ownDangers.map((card) => ({
-        label: `Eigen ${card.name} teruggeven`,
-        description: "Deze ramp verdwijnt uit je hand.",
-        value: { mode: "own", cardId: card.id },
-      })),
-    ]);
-  } else if (ownDangers.length > 0 && Math.random() < 0.5) {
-    returnChoice = { mode: "own", cardId: chooseRandomItem(ownDangers).id };
+async function resolveMirrorReturn(attacker, target, dangerCard, ownDangers) {
+  const refused = removeCardFromHand(attacker, dangerCard.id);
+  if (refused) {
+    state.discard.push(refused);
   }
 
-  if (returnChoice.mode === "own") {
-    const returned = removeCardFromHand(target, returnChoice.cardId);
-    if (returned) {
-      attacker.hand.push(returned);
-      addLog(`${target.name} gebruikte De Spiegel en gaf een ${returned.name} terug aan ${attacker.name}.`);
+  let returnCardId = chooseRandomItem(ownDangers)?.id;
+
+  if (target.isHuman) {
+    returnCardId = await showChoice("De Spiegel", "Kies welke eigen rampkaart je teruggeeft aan de aanvaller.", ownDangers.map((card) => ({
+        label: `Eigen ${card.name} teruggeven`,
+        description: `${dangerCard.name} gaat naar de aflegstapel.`,
+        value: card.id,
+      })));
+  }
+
+  const returned = removeCardFromHand(target, returnCardId);
+  if (returned) {
+    attacker.hand.push(returned);
+    addLog(`${target.name} gebruikte De Spiegel, legde ${dangerCard.name} af en gaf ${returned.name} terug aan ${attacker.name}.`);
+  }
+}
+
+async function chooseHumanWitchHillTransfers(player) {
+  const availableDangerIds = player.hand
+    .filter((card) => card.type === "danger")
+    .map((card) => card.id);
+  if (availableDangerIds.length === 0) {
+    return [];
+  }
+
+  let transferCount = 1;
+  if (availableDangerIds.length >= 2) {
+    const countChoice = await showChoice("De Heksenheuvel", "Hoeveel rampkaarten wil je weggeven?", [
+      {
+        label: "1 rampkaart weggeven",
+        description: "Geef één rampkaart aan een andere speler.",
+        value: 1,
+      },
+      {
+        label: "2 rampkaarten weggeven",
+        description: "Geef twee rampkaarten aan dezelfde speler of aan twee verschillende spelers.",
+        value: 2,
+      },
+      {
+        label: "Annuleren",
+        description: "Gebruik De Heksenheuvel nu niet.",
+        value: 0,
+      },
+    ]);
+    transferCount = countChoice;
+  }
+
+  if (!transferCount) {
+    return [];
+  }
+
+  const transfers = [];
+  const remainingDangerIds = [...availableDangerIds];
+  for (let index = 0; index < transferCount; index += 1) {
+    const cards = remainingDangerIds
+      .map((cardId) => player.hand.find((card) => card.id === cardId))
+      .filter(Boolean);
+    if (cards.length === 0) {
+      break;
     }
-  } else {
-    addLog(`${target.name} gebruikte De Spiegel en gaf de ${dangerCard.name} terug aan ${attacker.name}.`);
+
+    const cardId = await showChoice("De Heksenheuvel", `Kies rampkaart ${index + 1}.`, [
+      ...cards.map((card) => ({
+        label: card.name,
+        description: card.description,
+        value: card.id,
+      })),
+      {
+        label: "Stoppen",
+        description: index === 0 ? "Gebruik De Heksenheuvel nu niet." : "Geef geen tweede rampkaart weg.",
+        value: null,
+      },
+    ]);
+
+    if (!cardId) {
+      break;
+    }
+
+    const card = player.hand.find((candidate) => candidate.id === cardId);
+    const targetId = await choosePlayer("De Heksenheuvel", getOtherPlayers(player), `Kies het doelwit voor ${card.name}.`);
+    transfers.push({ card, target: getPlayer(targetId) });
+    remainingDangerIds.splice(remainingDangerIds.indexOf(cardId), 1);
+  }
+
+  return transfers;
+}
+
+function chooseComputerWitchHillTransfers(computerPlayer, players) {
+  const dangerPool = computerPlayer.hand.filter((card) => card.type === "danger");
+  if (dangerPool.length === 0) {
+    return [];
+  }
+
+  const transferCount = dangerPool.length >= 2 && Math.random() < 0.5 ? 2 : 1;
+  const transfers = [];
+  for (let index = 0; index < transferCount; index += 1) {
+    const card = chooseRandomItem(dangerPool);
+    const target = chooseRandomTarget(computerPlayer, players);
+    if (!card || !target) {
+      break;
+    }
+    transfers.push({ card, target });
+    dangerPool.splice(dangerPool.indexOf(card), 1);
+  }
+  return transfers;
+}
+
+function recordWitchHillUse(player, transferCount) {
+  if (transferCount >= 2) {
+    state.metrics.witchHillTwoPassed += 1;
+  } else if (transferCount === 1) {
+    state.metrics.witchHillOnePassed += 1;
+  }
+}
+
+function recordWitchHillUseInGame(game, transferCount) {
+  if (transferCount >= 2) {
+    game.metrics.witchHillTwoPassed += 1;
+  } else if (transferCount === 1) {
+    game.metrics.witchHillOnePassed += 1;
   }
 }
 
@@ -874,23 +989,10 @@ async function startEndgame() {
     }
 
     if (player.isHuman) {
-      const choice = await showChoice("De Grot", "Kies eventueel één ramp om weg te leggen voordat rampen worden verwerkt.", [
-        {
-          label: "Geen ramp wegleggen",
-          description: "Alle rampen blijven in je hand.",
-          value: null,
-        },
-        ...dangers.map((card) => ({
-          label: card.name,
-          description: card.description,
-          value: card.id,
-        })),
-      ]);
-      if (choice) {
-        removeDangerWithCave(player, choice, state);
-      }
+      const choice = await chooseHumanCaveRemoval(player);
+      applyCaveRemoval(player, choice, state);
     } else {
-      removeDangerWithCave(player, chooseRandomItem(dangers).id, state);
+      applyCaveRemoval(player, chooseComputerCaveRemoval(player), state);
     }
   }
 
@@ -900,17 +1002,77 @@ async function startEndgame() {
   renderInterface();
 }
 
-function removeDangerWithCave(player, cardId, game) {
-  const removed = removeCardFromHand(player, cardId);
-  if (!removed) {
-    return null;
+async function chooseHumanCaveRemoval(player) {
+  const pairOptions = getCavePairOptions(player);
+  const choice = await showChoice("De Grot", "Kies wat De Grot vóór de rampverwerking verwijdert.", [
+    {
+      label: "Verwijder één willekeurige rampkaart",
+      description: "De kaart wordt willekeurig uit je rampkaarten gekozen.",
+      value: { mode: "single" },
+    },
+    ...pairOptions.map((option) => ({
+      label: `Verwijder twee ${option.name}`,
+      description: "Verwijder twee identieke rampkaarten uit je hand.",
+      value: { mode: "pair", subtype: option.subtype },
+    })),
+  ]);
+  return choice;
+}
+
+function chooseComputerCaveRemoval(player) {
+  const pairOptions = getCavePairOptions(player);
+  if (pairOptions.length > 0) {
+    return { mode: "pair", subtype: chooseRandomItem(pairOptions).subtype };
   }
-  player.removedByCave.push(removed);
+  return { mode: "single" };
+}
+
+function applyCaveRemoval(player, choice, game) {
+  if (!choice) {
+    return [];
+  }
+
+  const removed = [];
+  if (choice.mode === "pair") {
+    const matchingCards = player.hand.filter((card) => card.type === "danger" && card.subtype === choice.subtype).slice(0, 2);
+    matchingCards.forEach((card) => {
+      const removedCard = removeCardFromHand(player, card.id);
+      if (removedCard) {
+        removed.push(removedCard);
+      }
+    });
+    if (removed.length === 2) {
+      game.metrics.cavePairRemoved += 1;
+    }
+  } else {
+    const dangerCard = chooseRandomItem(player.hand.filter((card) => card.type === "danger"));
+    const removedCard = dangerCard ? removeCardFromHand(player, dangerCard.id) : null;
+    if (removedCard) {
+      removed.push(removedCard);
+      game.metrics.caveOneRemoved += 1;
+    }
+  }
+
+  if (removed.length === 0) {
+    return [];
+  }
+
+  player.removedByCave.push(...removed);
   player.island.used = true;
-  game.discard.push(removed);
-  game.metrics.caveRemoved += 1;
-  addGameLog(game, `${player.name} verwijderde met De Grot een ramp.`);
+  game.discard.push(...removed);
+  game.metrics.caveRemoved += removed.length;
+  addGameLog(game, `${player.name} verwijderde met De Grot ${removed.length} rampkaart(en).`);
   return removed;
+}
+
+function getCavePairOptions(player) {
+  const counts = countBySubtype(player.hand.filter((card) => card.type === "danger"));
+  return Object.entries(counts)
+    .filter(([, count]) => count >= 2)
+    .map(([subtype]) => ({
+      subtype,
+      name: getCardDefinitionBySubtype(subtype)?.name || subtype,
+    }));
 }
 
 function neutralizeDisasters(player, metrics) {
@@ -1311,7 +1473,31 @@ function renderSimulationResults() {
   const playerRows = results.averageScoreByPlayer.map((row) => `
     <tr>
       <td>${escapeHtml(row.name)}</td>
+      <td>${row.wins}</td>
+      <td>${row.winRate}%</td>
       <td>${row.averageScore}</td>
+      <td>${escapeHtml(row.mostWinningStartingIsland)}</td>
+      <td>${escapeHtml(row.mostWinningFinalIsland)}</td>
+    </tr>
+  `).join("");
+  const startCombinationRows = results.topStartCombinations.map((row) => `
+    <tr>
+      <td class="combo-cell">${escapeHtml(row.combination)}</td>
+      <td>${row.games}</td>
+      <td>${row.gameRate}%</td>
+      <td>${row.winnerCount}</td>
+      <td>${row.averageWinningScore}</td>
+      <td>${escapeHtml(row.topWinnerPosition)}</td>
+    </tr>
+  `).join("");
+  const finalCombinationRows = results.topFinalCombinations.map((row) => `
+    <tr>
+      <td class="combo-cell">${escapeHtml(row.combination)}</td>
+      <td>${row.games}</td>
+      <td>${row.gameRate}%</td>
+      <td>${row.winnerCount}</td>
+      <td>${row.averageWinningScore}</td>
+      <td>${escapeHtml(row.topWinnerPosition)}</td>
     </tr>
   `).join("");
   const neutralizedRows = Object.entries(results.neutralized).map(([key, value]) => `
@@ -1329,8 +1515,16 @@ function renderSimulationResults() {
         <tbody>${islandRows}</tbody>
       </table>
       <table class="stats-table">
-        <thead><tr><th>Spelerpositie</th><th>Gem. score</th></tr></thead>
+        <thead><tr><th>Spelerpositie</th><th>Wins</th><th>Win%</th><th>Gem. score</th><th>Win-start eiland</th><th>Win-eind eiland</th></tr></thead>
         <tbody>${playerRows}</tbody>
+      </table>
+      <table class="stats-table">
+        <thead><tr><th>Start-eilandcombinatie</th><th>Potjes</th><th>Potjes %</th><th>Win-count</th><th>Gem. winnende score</th><th>Meest winnende positie</th></tr></thead>
+        <tbody>${startCombinationRows}</tbody>
+      </table>
+      <table class="stats-table">
+        <thead><tr><th>Eind-eilandcombinatie</th><th>Potjes</th><th>Potjes %</th><th>Win-count</th><th>Gem. winnende score</th><th>Meest winnende positie</th></tr></thead>
+        <tbody>${finalCombinationRows}</tbody>
       </table>
       <table class="stats-table">
         <thead><tr><th>Statistiek</th><th>Waarde</th></tr></thead>
@@ -1339,8 +1533,14 @@ function renderSimulationResults() {
           <tr><td>Laagste score</td><td>${results.lowestScore}</td></tr>
           <tr><td>Gemiddeld gebruikte Sabotagekaarten</td><td>${results.averageSabotageUsed}</td></tr>
           <tr><td>Gemiddeld doorgegeven rampen</td><td>${results.averageDisastersPassed}</td></tr>
+          <tr><td>Heksenheuvel gaf 1 ramp door</td><td>${results.witchHillOnePassed}</td></tr>
+          <tr><td>Heksenheuvel gaf 2 rampen door</td><td>${results.witchHillTwoPassed}</td></tr>
+          <tr><td>De Spiegel kon gebruikt worden</td><td>${results.mirrorAvailable}</td></tr>
+          <tr><td>De Spiegel kon niet door gebrek aan eigen ramp</td><td>${results.mirrorUnavailableNoDanger}</td></tr>
           <tr><td>De Spiegel gebruikt</td><td>${results.mirrorUsed}</td></tr>
-          <tr><td>De Grot verwijderde een ramp</td><td>${results.caveRemoved}</td></tr>
+          <tr><td>De Grot verwijderde rampkaarten</td><td>${results.caveRemoved}</td></tr>
+          <tr><td>De Grot koos 1 willekeurige ramp</td><td>${results.caveOneRemoved}</td></tr>
+          <tr><td>De Grot koos 2 identieke rampen</td><td>${results.cavePairRemoved}</td></tr>
           <tr><td>Voedselbos kreeg 3 bonuspunten</td><td>${results.foodBonus}</td></tr>
         </tbody>
       </table>
@@ -1567,7 +1767,7 @@ function simulateGames(gameCount, playerCount) {
 
     processCavesInstant(simulation);
     const scores = calculateFinalScore(simulation, simulation.metrics);
-    addSimulationScores(aggregate, scores, simulation.metrics);
+    addSimulationScores(aggregate, scores, simulation);
   }
 
   return finalizeSimulationAggregate(aggregate);
@@ -1672,28 +1872,37 @@ function computerUseSabotageInstant(game, computerPlayer) {
 }
 
 function computerUseWitchHillInstant(game, computerPlayer) {
-  const dangerCard = chooseRandomItem(computerPlayer.hand.filter((card) => card.type === "danger"));
-  const target = chooseRandomTarget(computerPlayer, game.players);
-  if (!dangerCard || !target) {
+  const transfers = chooseComputerWitchHillTransfers(computerPlayer, game.players);
+  if (transfers.length === 0) {
     return;
   }
   computerPlayer.island.used = true;
-  handleMirrorReactionInstant(game, computerPlayer, target, dangerCard);
+  recordWitchHillUseInGame(game, transfers.length);
+  transfers.forEach((transfer) => {
+    handleMirrorReactionInstant(game, computerPlayer, transfer.target, transfer.card);
+  });
 }
 
 function handleMirrorReactionInstant(game, attacker, target, dangerCard) {
   game.metrics.disastersPassed += 1;
-  if (target.island?.effectType === "mirror" && !target.island.used && Math.random() < 0.6) {
+  if (target.island?.effectType === "mirror" && !target.island.used) {
     const ownDangers = target.hand.filter((card) => card.type === "danger");
-    if (ownDangers.length > 0 && Math.random() < 0.5) {
+    if (ownDangers.length > 0) {
+      game.metrics.mirrorAvailable += 1;
+      const refused = removeCardFromHand(attacker, dangerCard.id);
+      if (refused) {
+        game.discard.push(refused);
+      }
       const returned = removeCardFromHand(target, chooseRandomItem(ownDangers).id);
       if (returned) {
         attacker.hand.push(returned);
       }
+      target.island.used = true;
+      game.metrics.mirrorUsed += 1;
+      return;
+    } else {
+      game.metrics.mirrorUnavailableNoDanger += 1;
     }
-    target.island.used = true;
-    game.metrics.mirrorUsed += 1;
-    return;
   }
 
   const transferred = removeCardFromHand(attacker, dangerCard.id);
@@ -1719,7 +1928,7 @@ function processCavesInstant(game) {
     }
     const dangers = player.hand.filter((card) => card.type === "danger");
     if (dangers.length > 0) {
-      removeDangerWithCave(player, chooseRandomItem(dangers).id, game);
+      applyCaveRemoval(player, chooseComputerCaveRemoval(player), game);
     }
   });
 }
@@ -1739,20 +1948,39 @@ function createSimulationAggregate(games, playerCount) {
       name: `Spelerpositie ${index + 1}`,
       totalScore: 0,
       count: 0,
+      wins: 0,
+      startingIslandWins: {},
+      finalIslandWins: {},
     })),
+    startCombinationStats: {},
+    finalCombinationStats: {},
     highestScore: Number.NEGATIVE_INFINITY,
     lowestScore: Number.POSITIVE_INFINITY,
     sabotageUsed: 0,
     disastersPassed: 0,
     neutralized: { bear: 0, fire: 0, drought: 0, leak: 0 },
+    witchHillOnePassed: 0,
+    witchHillTwoPassed: 0,
+    mirrorAvailable: 0,
+    mirrorUnavailableNoDanger: 0,
     mirrorUsed: 0,
     caveRemoved: 0,
+    caveOneRemoved: 0,
+    cavePairRemoved: 0,
     foodBonus: 0,
   };
 }
 
-function addSimulationScores(aggregate, scores, metrics) {
+function addSimulationScores(aggregate, scores, simulation) {
+  const metrics = simulation.metrics;
   const highest = Math.max(...scores.map((score) => score.total));
+  const winners = scores.filter((score) => score.total === highest);
+  const startCombination = createIslandCombination(simulation.players, "starting");
+  const finalCombination = createIslandCombination(simulation.players, "final");
+
+  addCombinationResult(aggregate.startCombinationStats, startCombination, scores, winners);
+  addCombinationResult(aggregate.finalCombinationStats, finalCombination, scores, winners);
+
   scores.forEach((score, index) => {
     const island = aggregate.islandStats[score.islandKey];
     island.appearances += 1;
@@ -1761,20 +1989,97 @@ function addSimulationScores(aggregate, scores, metrics) {
       island.wins += 1;
     }
 
-    aggregate.scoreByPlayer[index].totalScore += score.total;
-    aggregate.scoreByPlayer[index].count += 1;
+    const playerStats = aggregate.scoreByPlayer[index];
+    const simulationPlayer = simulation.players[index];
+    playerStats.totalScore += score.total;
+    playerStats.count += 1;
+    if (score.total === highest) {
+      playerStats.wins += 1;
+      incrementCounter(playerStats.startingIslandWins, simulationPlayer.startingIslandName || score.islandName);
+      incrementCounter(playerStats.finalIslandWins, score.islandName);
+    }
     aggregate.highestScore = Math.max(aggregate.highestScore, score.total);
     aggregate.lowestScore = Math.min(aggregate.lowestScore, score.total);
   });
 
   aggregate.sabotageUsed += metrics.sabotageUsed;
   aggregate.disastersPassed += metrics.disastersPassed;
+  aggregate.witchHillOnePassed += metrics.witchHillOnePassed;
+  aggregate.witchHillTwoPassed += metrics.witchHillTwoPassed;
+  aggregate.mirrorAvailable += metrics.mirrorAvailable;
+  aggregate.mirrorUnavailableNoDanger += metrics.mirrorUnavailableNoDanger;
   aggregate.mirrorUsed += metrics.mirrorUsed;
   aggregate.caveRemoved += metrics.caveRemoved;
+  aggregate.caveOneRemoved += metrics.caveOneRemoved;
+  aggregate.cavePairRemoved += metrics.cavePairRemoved;
   aggregate.foodBonus += metrics.foodBonus;
   Object.keys(aggregate.neutralized).forEach((key) => {
     aggregate.neutralized[key] += metrics.neutralized[key] || 0;
   });
+}
+
+function createIslandCombination(players, mode) {
+  const parts = players.map((player, index) => {
+    const islandName = mode === "starting"
+      ? player.startingIslandName || player.island?.name || "Onbekend"
+      : player.island?.name || "Onbekend";
+    return `P${index + 1}: ${islandName}`;
+  });
+
+  const label = parts.join(" | ");
+  return {
+    key: label,
+    label,
+  };
+}
+
+function addCombinationResult(targetStats, combination, scores, winners) {
+  if (!targetStats[combination.key]) {
+    targetStats[combination.key] = {
+      label: combination.label,
+      games: 0,
+      winnerCount: 0,
+      totalWinningScore: 0,
+      winnerPositions: {},
+    };
+  }
+
+  const entry = targetStats[combination.key];
+  entry.games += 1;
+  winners.forEach((winner) => {
+    const playerIndex = scores.findIndex((score) => score.playerId === winner.playerId);
+    entry.winnerCount += 1;
+    entry.totalWinningScore += winner.total;
+    incrementCounter(entry.winnerPositions, `Spelerpositie ${playerIndex + 1}`);
+  });
+}
+
+function finalizeCombinationStats(stats, totalGames) {
+  return Object.values(stats)
+    .map((entry) => ({
+      combination: entry.label,
+      games: entry.games,
+      gameRate: formatNumber((entry.games / totalGames) * 100),
+      winnerCount: entry.winnerCount,
+      averageWinningScore: entry.winnerCount ? formatNumber(entry.totalWinningScore / entry.winnerCount) : "0.0",
+      topWinnerPosition: getTopCounterLabel(entry.winnerPositions),
+    }))
+    .sort((left, right) => right.winnerCount - left.winnerCount || right.games - left.games)
+    .slice(0, 8);
+}
+
+function incrementCounter(target, key) {
+  target[key] = (target[key] || 0) + 1;
+}
+
+function getTopCounterLabel(counter) {
+  const entries = Object.entries(counter).sort((left, right) => right[1] - left[1]);
+  if (!entries.length) {
+    return "Geen wins";
+  }
+
+  const [label, count] = entries[0];
+  return `${label} (${count})`;
 }
 
 function finalizeSimulationAggregate(aggregate) {
@@ -1791,13 +2096,25 @@ function finalizeSimulationAggregate(aggregate) {
     lowestScore: aggregate.lowestScore,
     averageScoreByPlayer: aggregate.scoreByPlayer.map((player) => ({
       name: player.name,
+      wins: player.wins,
+      winRate: formatNumber((player.wins / aggregate.games) * 100),
       averageScore: player.count ? formatNumber(player.totalScore / player.count) : "0.0",
+      mostWinningStartingIsland: getTopCounterLabel(player.startingIslandWins),
+      mostWinningFinalIsland: getTopCounterLabel(player.finalIslandWins),
     })),
+    topStartCombinations: finalizeCombinationStats(aggregate.startCombinationStats, aggregate.games),
+    topFinalCombinations: finalizeCombinationStats(aggregate.finalCombinationStats, aggregate.games),
     averageSabotageUsed: formatNumber(aggregate.sabotageUsed / aggregate.games),
     averageDisastersPassed: formatNumber(aggregate.disastersPassed / aggregate.games),
     neutralized: aggregate.neutralized,
+    witchHillOnePassed: aggregate.witchHillOnePassed,
+    witchHillTwoPassed: aggregate.witchHillTwoPassed,
+    mirrorAvailable: aggregate.mirrorAvailable,
+    mirrorUnavailableNoDanger: aggregate.mirrorUnavailableNoDanger,
     mirrorUsed: aggregate.mirrorUsed,
     caveRemoved: aggregate.caveRemoved,
+    caveOneRemoved: aggregate.caveOneRemoved,
+    cavePairRemoved: aggregate.cavePairRemoved,
     foodBonus: aggregate.foodBonus,
   };
 }
@@ -1820,7 +2137,13 @@ function buildSimulationReport(results) {
     .map((row) => `- ${row.name}: ${row.wins} wins, ${row.winRate}% winrate, gemiddelde score ${row.averageScore}`)
     .join("\n");
   const playerLines = results.averageScoreByPlayer
-    .map((row) => `- ${row.name}: gemiddelde score ${row.averageScore}`)
+    .map((row) => `- ${row.name}: ${row.wins} wins, ${row.winRate}% winrate, gemiddelde score ${row.averageScore}, vaakst winnend start-eiland: ${row.mostWinningStartingIsland}, vaakst winnend eind-eiland: ${row.mostWinningFinalIsland}`)
+    .join("\n");
+  const startCombinationLines = results.topStartCombinations
+    .map((row) => `- ${row.combination}: ${row.games} potjes (${row.gameRate}%), ${row.winnerCount} win-count, gemiddelde winnende score ${row.averageWinningScore}, meest winnende positie: ${row.topWinnerPosition}`)
+    .join("\n");
+  const finalCombinationLines = results.topFinalCombinations
+    .map((row) => `- ${row.combination}: ${row.games} potjes (${row.gameRate}%), ${row.winnerCount} win-count, gemiddelde winnende score ${row.averageWinningScore}, meest winnende positie: ${row.topWinnerPosition}`)
     .join("\n");
 
   return `# Conclusierapport Campfire Survival
@@ -1830,6 +2153,8 @@ function buildSimulationReport(results) {
 - Aantal spelers per potje: ${results.playerCount}
 - Alle spelers werden volledig automatisch bestuurd met vaste JavaScript-regels en willekeurige keuzes.
 - Deze simulatie is bedoeld als snelle balanscheck, niet als definitief statistisch bewijs.
+- Bij gelijke hoogste score telt iedere winnaar mee in de win-count.
+- Eilandcombinaties zijn bij 100 potjes vooral indicatief; voor sterke conclusies over combinaties is 1.000 potjes nuttiger.
 
 ## Resultaten per eiland
 ${islandLines}
@@ -1844,15 +2169,27 @@ ${islandLines}
 - Laagste winpercentage: ${lowestWinRate.name} met ${lowestWinRate.winRate}%
 - Verschil tussen hoogste en laagste winpercentage: ${winRateSpread} procentpunt
 
-## Gemiddelde score per spelerpositie
+## Wins per spelerpositie
 ${playerLines}
 - Verschil tussen beste en slechtste spelerpositie: ${playerScoreSpread}
+
+## Winnende start-eilandcombinaties
+${startCombinationLines}
+
+## Winnende eind-eilandcombinaties
+${finalCombinationLines}
 
 ## Interactiekaarten en rampen
 - Gemiddeld gebruikte Sabotagekaarten per potje: ${results.averageSabotageUsed}
 - Gemiddeld doorgegeven rampen per potje: ${results.averageDisastersPassed}
+- De Heksenheuvel gaf 1 ramp door: ${results.witchHillOnePassed} keer
+- De Heksenheuvel gaf 2 rampen door: ${results.witchHillTwoPassed} keer
+- De Spiegel kon gebruikt worden: ${results.mirrorAvailable} keer
+- De Spiegel kon niet gebruikt worden door gebrek aan eigen ramp: ${results.mirrorUnavailableNoDanger} keer
 - De Spiegel werd gebruikt: ${results.mirrorUsed} keer
-- De Grot verwijderde een ramp: ${results.caveRemoved} keer
+- De Grot verwijderde rampkaarten: ${results.caveRemoved}
+- De Grot koos voor 1 willekeurige ramp verwijderen: ${results.caveOneRemoved} keer
+- De Grot koos voor 2 identieke rampen verwijderen: ${results.cavePairRemoved} keer
 - Het Voedselbos kreeg 3 bonuspunten: ${results.foodBonus} keer
 
 ## Tegen gehouden rampen
@@ -1863,14 +2200,18 @@ ${neutralizedLines}
 - Als een eiland structureel lager scoort, is de kracht mogelijk te situationeel of te zwak.
 - Een groot verschil tussen spelerposities kan wijzen op beurtvolgordevoordeel.
 - Veel gebruikte Sabotage en doorgegeven rampen betekenen dat interactie waarschijnlijk vaak voorkomt.
-- Als De Spiegel of De Grot weinig effect heeft, kan de timing of trigger te zeldzaam zijn.
+- Als De Spiegel vaak niet gebruikt kan worden, is de eis van een eigen rampkaart mogelijk streng.
+- Als De Grot vaak twee identieke rampen verwijdert, kan die kracht sterker zijn dan voorheen.
+- Verschil tussen start- en eindcombinaties laat zien hoeveel invloed Kamp verplaatsen heeft op de balansmeting.
 
 ## Vragen aan ChatGPT
 1. Beoordeel op basis van deze cijfers welke eilandkaarten waarschijnlijk te sterk of te zwak zijn.
 2. Geef concrete balansvoorstellen voor de zwakste en sterkste eilanden.
 3. Controleer of de hoeveelheid negatieve interactie via Sabotage, De Heksenheuvel en De Spiegel leuk lijkt of mogelijk frustrerend wordt.
-4. Stel eventueel een definitief effect voor Kano lek voor dat past bij deze balans.
-5. Geef suggesties voor extra testmetingen die in een volgende simulatie nuttig zijn.
+4. Controleer of er een spelerpositie- of beurtvolgordevoordeel zichtbaar is.
+5. Vergelijk start- en eind-eilandcombinaties en beoordeel of Kamp verplaatsen de balansmeting vertekent.
+6. Stel eventueel een definitief effect voor Kano lek voor dat past bij deze balans.
+7. Geef suggesties voor extra testmetingen die in een volgende simulatie nuttig zijn.
 `;
 }
 
@@ -2013,8 +2354,14 @@ function createMetrics() {
     sabotageUsed: 0,
     disastersPassed: 0,
     neutralized: { bear: 0, fire: 0, drought: 0, leak: 0 },
+    witchHillOnePassed: 0,
+    witchHillTwoPassed: 0,
+    mirrorAvailable: 0,
+    mirrorUnavailableNoDanger: 0,
     mirrorUsed: 0,
     caveRemoved: 0,
+    caveOneRemoved: 0,
+    cavePairRemoved: 0,
     foodBonus: 0,
   };
 }
@@ -2238,7 +2585,7 @@ function getRulesHtml() {
     </section>
     <section>
       <h3>Computerregels</h3>
-      <p>Een computerspeler trekt met 65% kans een kaart en steelt met 35% kans een willekeurige handkaart van een geldige tegenstander. Sabotage wordt met 50% kans gebruikt als dat kan. De Heksenheuvel wordt met 35% kans gebruikt als dat kan. De Spiegel wordt met 60% kans gebruikt wanneer een ramp wordt aangeboden.</p>
+      <p>Een computerspeler trekt met 65% kans een kaart en steelt met 35% kans een willekeurige handkaart van een geldige tegenstander. Sabotage wordt met 50% kans gebruikt als dat kan. De Heksenheuvel wordt met 35% kans gebruikt als dat kan; bij twee of meer rampen is er 50% kans dat de computer twee rampen weggeeft. De Spiegel wordt gebruikt wanneer de computer minimaal één eigen rampkaart heeft.</p>
     </section>
     <section>
       <h3>Kaarten</h3>
@@ -2251,7 +2598,7 @@ function getRulesHtml() {
     </section>
     <section>
       <h3>Einde en score</h3>
-      <p>Het spel eindigt wanneer de trekstapel leeg is. De Grot verwijdert eerst eventueel een ramp. Daarna blokkeren Bijl, Hengel en Regenbui passende rampen. Beer kost 2 Vis, Bosbrand 2 Hout, Droogte 2 Water en Kano lek heeft voorlopig geen effect.</p>
+      <p>Het spel eindigt wanneer de trekstapel leeg is. De Grot verwijdert eerst één willekeurige ramp of twee identieke rampen. Daarna blokkeren Bijl, Hengel en Regenbui passende rampen. Beer kost 2 Vis, Bosbrand 2 Hout, Droogte 2 Water en Kano lek heeft voorlopig geen effect.</p>
     </section>
   `;
 }

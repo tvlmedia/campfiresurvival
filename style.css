@@ -496,6 +496,10 @@ h3 {
   gap: 8px;
 }
 
+.debug-group input {
+  width: 100%;
+}
+
 .stats-table {
   width: 100%;
   border-collapse: collapse;
@@ -524,6 +528,19 @@ h3 {
   display: grid;
   gap: 12px;
   margin-top: 12px;
+}
+
+.multi-choice {
+  align-items: start;
+  grid-template-columns: auto 1fr;
+}
+
+.multi-choice input {
+  margin-top: 4px;
+}
+
+.multi-choice span {
+  grid-column: 2;
 }
 
 .report-box {
